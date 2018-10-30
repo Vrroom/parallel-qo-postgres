@@ -1,3 +1,10 @@
+Environment Variables
+=====================
+
+export PATH=$HOME/postgresql/bin:$PATH
+export PGDATA=$HOME/postgresql/dbdir
+export LD_LIBRARY_PATH=$HOME/postgresql/lib
+
 PostgreSQL Database Management System
 =====================================
 

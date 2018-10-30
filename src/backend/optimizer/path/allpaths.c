@@ -2754,15 +2754,15 @@ standard_join_search(PlannerInfo *root, int levels_needed, List *initial_rels)
 			rel = (RelOptInfo *) lfirst(lc);
 
 			/* Create paths for partitionwise joins. */
-			generate_partitionwise_join_paths(root, rel);
+			//generate_partitionwise_join_paths(root, rel);
 
 			/*
 			 * Except for the topmost scan/join rel, consider gathering
 			 * partial paths.  We'll do the same for the topmost scan/join rel
 			 * once we know the final targetlist (see grouping_planner).
 			 */
-			if (lev < levels_needed)
-				generate_gather_paths(root, rel, false);
+			//if (lev < levels_needed)
+			//	generate_gather_paths(root, rel, false);
 
 			/* Find and save the cheapest paths for this rel */
 			set_cheapest(rel);

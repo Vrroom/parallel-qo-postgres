@@ -131,6 +131,7 @@ join_search_one_level(PlannerInfo *root, int level)
 		}
 	}
 
+	// THIS SECTION COMMENTED BY SUMIT
 	/*
 	 * Now, consider "bushy plans" in which relations of k initial rels are
 	 * joined to relations of level-k initial rels, for 2 <= k <= level-2.
@@ -139,14 +140,14 @@ join_search_one_level(PlannerInfo *root, int level)
 	 * suitable join clause (or join order restriction), in order to avoid
 	 * unreasonable growth of planning time.
 	 */
-	for (k = 2;; k++)
+	/*for (k = 2;; k++)
 	{
 		int			other_level = level - k;
 
-		/*
+
 		 * Since make_join_rel(x, y) handles both x,y and y,x cases, we only
 		 * need to go as far as the halfway point.
-		 */
+
 		if (k > other_level)
 			break;
 
@@ -156,17 +157,17 @@ join_search_one_level(PlannerInfo *root, int level)
 			ListCell   *other_rels;
 			ListCell   *r2;
 
-			/*
+
 			 * We can ignore relations without join clauses here, unless they
 			 * participate in join-order restrictions --- then we might have
 			 * to force a bushy join plan.
-			 */
+
 			if (old_rel->joininfo == NIL && !old_rel->has_eclass_joins &&
 				!has_join_restriction(root, old_rel))
 				continue;
 
 			if (k == other_level)
-				other_rels = lnext(r);	/* only consider remaining rels */
+				other_rels = lnext(r);	 only consider remaining rels
 			else
 				other_rels = list_head(joinrels[other_level]);
 
@@ -176,11 +177,11 @@ join_search_one_level(PlannerInfo *root, int level)
 
 				if (!bms_overlap(old_rel->relids, new_rel->relids))
 				{
-					/*
+
 					 * OK, we can build a rel of the right level from this
 					 * pair of rels.  Do so if there is at least one relevant
 					 * join clause or join order restriction.
-					 */
+
 					if (have_relevant_joinclause(root, old_rel, new_rel) ||
 						have_join_order_restriction(root, old_rel, new_rel))
 					{
@@ -190,7 +191,7 @@ join_search_one_level(PlannerInfo *root, int level)
 			}
 		}
 	}
-
+*/
 	/*----------
 	 * Last-ditch effort: if we failed to find any usable joins so far, force
 	 * a set of cartesian-product joins to be generated.  This handles the
