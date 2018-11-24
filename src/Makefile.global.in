@@ -310,7 +310,7 @@ ifdef PGXS
 else
   LDFLAGS_INTERNAL = -L$(top_builddir)/src/port -L$(top_builddir)/src/common
 endif
-LDFLAGS = $(LDFLAGS_INTERNAL) @LDFLAGS@
+LDFLAGS = $(LDFLAGS_INTERNAL) @LDFLAGS@ -lglib-2.0
 
 LDFLAGS_EX = @LDFLAGS_EX@
 # LDFLAGS_SL might have already been assigned by calling makefile
