@@ -64,6 +64,7 @@ typedef struct worker_data{
 	int levels_needed;
 	int part_id;
 	int n_workers;
+	int p_type;
 } worker_data;
 
 typedef struct worker_output {
@@ -84,7 +85,7 @@ List * cartesian_product(List *, List *);
 List * adm_join_results(int, List *);
 void try_splits(PlannerInfo *, List *, List *, RelOptInfo **, int);
 void * worker(void *);
-RelOptInfo * parallel_join_search (PlannerInfo *, int, List *, int);
+RelOptInfo * parallel_join_search (PlannerInfo *, int, List *, int, int);
 
 int ptr_less (const void * a, const void * b){
 	List * one = (List *) lfirst(*(ListCell **) a);
@@ -122,6 +123,59 @@ List * constrained_power_set(List * constr, int q1, int q2){
 	return cps;
 }
 
+// changed for bushy tree joins
+List * constrained_power_set_b(List * constr, int q1, int q2, int q3){
+	List * cps = NIL;
+	//	GArray * empty = g_array_new(FALSE, FALSE, sizeof(gint));
+	//	g_ptr_array_add(cps, empty);
+	// size 1 elems of power(S) and {1, 2} in S
+	List * arr1 = NIL;
+	arr1 = lappend_int(arr1, q1);
+	cps = lappend(cps, arr1);
+	List * arr2 = NIL;
+	arr2 = lappend_int(arr2, q2);
+	cps = lappend(cps, arr2);
+	List * arr3 = NIL;
+	arr3 = lappend_int(arr3, q3);
+	cps = lappend(cps, arr3);
+
+	List * arr12 = NIL;
+	arr12 = lappend_int(arr12, q1);
+	arr12 = lappend_int(arr12, q2);
+	cps = lappend(cps, arr12);
+
+	bool include_q1q3 = true;
+	bool include_q2q3 = true;
+	for(int i = 0; i < list_length(constr); i++){
+		List * ci = (List *) list_nth(constr, i);
+		if(list_nth_int(ci, 1) == q1)
+			include_q1q3 = false;
+		else if(list_nth_int(ci, 1) == q2)
+			include_q2q3 = false;
+	}
+	if(include_q1q3){
+		List * arr = NIL;
+		arr = lappend_int(arr, q1);
+		arr = lappend_int(arr, q3);
+		cps = lappend(cps, arr);
+	}
+	if(include_q2q3){
+		List * arr = NIL;
+		arr = lappend_int(arr, q2);
+		arr = lappend_int(arr, q3);
+		cps = lappend(cps, arr);
+	}
+
+	// size 3 {1, 2, 3} in S
+	List * arr123 = NIL;
+	arr123 = lappend_int(arr123, q1);
+	arr123 = lappend_int(arr123, q2);
+	arr123 = lappend_int(arr123, q3);
+	cps = lappend(cps, arr123);
+	return cps;
+}
+
+
 // The arguments aren't modified here also
 List * part_constraints(int levels_needed, int part_id, int n_workers){
 	List * pc = NIL;
@@ -138,6 +192,30 @@ List * part_constraints(int levels_needed, int part_id, int n_workers){
 		List * arr = NIL;
 		arr = lappend_int(arr, q1);
 		arr = lappend_int(arr, q2);
+		pc = lappend(pc, arr);
+	}
+	return pc;
+}
+
+// changed for bushy tree joins
+List * part_constraints_b(int levels_needed, int part_id, int n_workers){
+	List * pc = NIL;
+	for(int i = 0; (1 << i) < n_workers; i++){
+		int select = part_id & (1 << i);
+		int q1, q2, q3;
+		if(select > 0){
+			q1 = 3*i + 1;
+			q2 = 3*i;
+			q3 = 3*i + 2;
+		}else{
+			q1 = 3*i;
+			q2 = 3*i + 1;
+			q3 = 3*i + 2;
+		}
+		List * arr = NIL;
+		arr = lappend_int(arr, q1);
+		arr = lappend_int(arr, q2);
+		arr = lappend_int(arr, q3);
 		pc = lappend(pc, arr);
 	}
 	return pc;
@@ -203,6 +281,26 @@ List * adm_join_results(int levels_needed, List * constr){
 	}
 	return join_res;
 }
+
+// changed for bushy tree joins
+List * adm_join_results_b(int levels_needed, List * constr){
+	List * join_res = NIL;
+//	GArray * empty = g_array_new(FALSE, FALSE, sizeof(gint));
+//	g_ptr_array_add(join_res, empty);
+	for(int i = 0; 3*i + 2 < levels_needed; i++){
+		int q1 = 3*i;
+		int q2 = 3*i + 1;
+		int q3 = 3*i + 2;
+		List * cps = constrained_power_set_b(constr, q1, q2, q3);
+		join_res = cartesian_product(join_res, cps);
+	}
+	// for (int i = 0; i < join_res->len; i++)
+	// {
+	// 	print_array(g_ptr_array_index(join_res, i));
+	// }
+	return join_res;
+}
+
 
 // Due to the bitmap, we are constrained by joins of 32 tables.
 void try_splits(PlannerInfo *root, List * sub_rels, List * constr, RelOptInfo ** P, int levels_needed){
@@ -290,6 +388,255 @@ void try_splits(PlannerInfo *root, List * sub_rels, List * constr, RelOptInfo **
 	pfree(present);
 }
 
+
+// Due to the bitmap, we are constrained by joins of 32 tables.
+void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, RelOptInfo ** P, int n){
+	List * A = NIL;
+//	GArray * empty = g_array_new(FALSE, FALSE, sizeof(gint));
+//	g_ptr_array_add(A, empty);
+	// GArray * valid = g_array_sized_new(FALSE, FALSE, sizeof(gboolean), n);
+
+	bool * present = (bool *) palloc(n*sizeof(bool));
+
+	// gboolean tr = TRUE;
+	//	bool fls = false;
+	int bitmap = 0;
+
+	for(int i = 0; i < n; i++){
+		present[i] = false;
+		// g_array_append_val(valid, tr);
+	}
+	for(int i = 0; i < list_length(sub_rels); i++){
+		int num = list_nth_int(sub_rels, i);
+		bitmap |= (1 << num);
+		present[num] = true;
+	}
+	// print_array(sub_rels);
+	// printf("%d\n", bitmap);
+	for (int i = 0; 3*i+2 < n; i++)
+	{
+
+		if(i < list_length(constr)){
+			List * ithentry = (List *) list_nth(constr, i);
+			int q1 = list_nth_int(ithentry, 0);
+			int q2 = list_nth_int(ithentry, 1);
+			int q3 = list_nth_int(ithentry, 2);
+			// GArray * S = g_array_new(FALSE, FALSE, sizeof(gint));
+			bool q1pres = present[q1];
+			bool q2pres = present[q2];
+			bool q3pres = present[q3];
+
+			List * Spower = NIL;
+
+	//		GArray * empty1 = g_array_new(FALSE, FALSE, sizeof(gint));
+	//		g_ptr_array_add(Spower, empty1);
+
+			if (q3pres)
+			{
+				List * arr3 = NIL;
+				arr3 = lappend_int(arr3, q3);
+				Spower = lappend(Spower, arr3);
+				if (q2pres)
+				{
+					List * arr2 = NIL;
+					arr2 = lappend_int(arr2, q2);
+					Spower = lappend(Spower, arr2);
+					if (q1pres)
+					{
+						List * arr12 = NIL;
+						arr12 = lappend_int(arr12, q1);
+						arr12 = lappend_int(arr12, q2);
+						List * arr13 = NIL;
+						arr13 = lappend_int(arr13, q1);
+						arr13 = lappend_int(arr13, q3);
+						List * arr123 = NIL;
+						arr123 = lappend_int(arr123, q1);
+						arr123 = lappend_int(arr123, q2);
+						arr123 = lappend_int(arr123, q3);
+						Spower = lappend(Spower, arr12);
+						Spower = lappend(Spower, arr13);
+						Spower = lappend(Spower, arr123);
+					}
+				}
+				else{
+					if (q1pres)
+					{
+						List * arr1 = NIL;
+						arr1 = lappend_int(arr1, q1);
+						List * arr13 = NIL;
+						arr13 = lappend_int(arr13, q1);
+						arr13 = lappend_int(arr13, q3);
+						Spower = lappend(Spower, arr1);
+						Spower = lappend(Spower, arr13);
+					}
+				}
+			}
+			else{
+				if (q2pres)
+				{
+					List * arr2 = NIL;
+					arr2 = lappend_int(arr2, q2);
+					Spower = lappend(Spower, arr2);
+					if (q1pres)
+					{
+						List * arr1 = NIL;
+						arr1 = lappend_int(arr1, q1);
+						List * arr12 = NIL;
+						arr12 = lappend_int(arr12, q1);
+						arr12 = lappend_int(arr12, q2);
+						Spower = lappend(Spower, arr12);
+						Spower = lappend(Spower, arr1);
+					}
+				}
+				else{
+					if (q1pres)
+					{
+						List * arr1 = NIL;
+						arr1 = lappend_int(arr1, q1);
+						Spower = lappend(Spower, arr1);
+					}
+				}
+			}
+			// print_array(g_ptr_array_index(Spower, 1));
+			A = cartesian_product(A, Spower);
+		}else{
+			int q1 = 3*i;
+			int q2 = 3*i+1;
+			int q3 = 3*i+2;
+			// GArray * S = g_array_new(FALSE, FALSE, sizeof(gint));
+			bool q1pres = present[q1];
+			bool q2pres = present[q2];
+			bool q3pres = present[q3];
+
+			List * Spower = NIL;
+
+	//		GArray * empty1 = g_array_new(FALSE, FALSE, sizeof(gint));
+	//		g_ptr_array_add(Spower, empty1);
+
+			if (q3pres)
+			{
+				List * arr3 = NIL;
+				arr3 = lappend_int(arr3, q3);
+				Spower = lappend(Spower, arr3);
+				if (q2pres)
+				{
+					List * arr2 = NIL;
+					arr2 = lappend_int(arr2, q2);
+					Spower = lappend(Spower, arr2);
+					List * arr23 = NIL;
+					arr23 = lappend_int(arr23, q2);
+					arr23 = lappend_int(arr23, q3);
+					Spower = lappend(Spower, arr23);
+					if (q1pres)
+					{
+						List * arr1 = NIL;
+						arr1 = lappend_int(arr1, q1);
+						Spower = lappend(Spower, arr1);
+						List * arr12 = NIL;
+						arr12 = lappend_int(arr12, q1);
+						arr12 = lappend_int(arr12, q2);
+						List * arr13 = NIL;
+						arr13 = lappend_int(arr13, q1);
+						arr13 = lappend_int(arr13, q3);
+						List * arr123 = NIL;
+						arr123 = lappend_int(arr123, q1);
+						arr123 = lappend_int(arr123, q2);
+						arr123 = lappend_int(arr123, q3);
+						Spower = lappend(Spower, arr12);
+						Spower = lappend(Spower, arr13);
+						Spower = lappend(Spower, arr123);
+					}
+				}
+				else{
+					if (q1pres)
+					{
+						List * arr1 = NIL;
+						arr1 = lappend_int(arr1, q1);
+						List * arr13 = NIL;
+						arr13 = lappend_int(arr13, q1);
+						arr13 = lappend_int(arr13, q3);
+						Spower = lappend(Spower, arr1);
+						Spower = lappend(Spower, arr13);
+					}
+				}
+			}
+			else{
+				if (q2pres)
+				{
+					List * arr2 = NIL;
+					arr2 = lappend_int(arr2, q2);
+					Spower = lappend(Spower, arr2);
+					if (q1pres)
+					{
+						List * arr1 = NIL;
+						arr1 = lappend_int(arr1, q1);
+						List * arr12 = NIL;
+						arr12 = lappend_int(arr12, q1);
+						arr12 = lappend_int(arr12, q2);
+						Spower = lappend(Spower, arr12);
+						Spower = lappend(Spower, arr1);
+					}
+				}
+				else{
+					if (q1pres)
+					{
+						List * arr1 = NIL;
+						arr1 = lappend_int(arr1, q1);
+						Spower = lappend(Spower, arr1);
+					}
+				}
+			}
+			// print_array(g_ptr_array_index(Spower, 1));
+			A = cartesian_product(A, Spower);
+
+		}
+	}
+
+	for (int i = 0; i < list_length(A); i++)
+	{
+		List * L = (List *) list_nth(A, i);
+		int bitmapl = 0;
+		int bitmapr = 0;
+		for (int j = 0; j < list_length(L); j++)
+		{
+			int num = list_nth_int(L, j);
+			bitmapl |= (1 << num);
+
+		}
+		if (bitmapl == 0 || bitmapl == bitmap)
+		{
+			continue;
+		}
+		bitmapr = bitmap - bitmapl;
+		// printf("%d %d %d\n", bitmapl, bitmapr, bitmap);
+
+		RelOptInfo * l_splt = P[bitmapl];
+		RelOptInfo * r_splt = P[bitmapr];
+		RelOptInfo * join_rel = make_join_rel(root, l_splt, r_splt);
+
+		if(join_rel){
+			generate_partitionwise_join_paths(root, join_rel);
+
+			if(list_length(sub_rels) != n)
+				generate_gather_paths(root, join_rel, false);
+
+			set_cheapest(join_rel);
+		}
+//		prune_b(P, bitmapl, bitmapr);
+
+		if(P[bitmap] == NULL){
+			P[bitmap] = join_rel;
+		}else if(P[bitmap]->cheapest_total_path->total_cost > join_rel->cheapest_total_path->total_cost){
+			P[bitmap] = join_rel;
+		}
+
+	}
+
+	pfree(present);
+//	g_ptr_array_free(A, TRUE);
+}
+
+
 void * worker(void * data){
 	pthread_mutex_lock(&mutex);
 	worker_data * wi = (worker_data *) data;
@@ -298,19 +645,32 @@ void * worker(void * data){
 	int levels_needed = wi->levels_needed;
 	int part_id = wi->part_id;
 	int n_workers = wi->n_workers;
+	int p_type = wi->p_type;
 
 	// Get the relevant constraints for this worker using part_id.
-	List * constr =  part_constraints(levels_needed, part_id, n_workers);
+	//pthread_mutex_lock(&mutex);
+	List * constr;
 
 	// Given the set of constraints, populate this array of arrays
 	// with the possible intermediate results.
-	List * join_res = adm_join_results(levels_needed, constr);
+	List * join_res;
+
+	if(p_type == 2){
+		constr =  part_constraints(levels_needed, part_id, n_workers);
+		join_res = adm_join_results(levels_needed, constr);
+	}else if (p_type == 3){
+		constr = part_constraints_b(levels_needed, part_id, n_workers);
+		join_res = adm_join_results_b(levels_needed, constr);
+	}else{
+		printf("error : invalid p_type\n");
+	}
 
 	// This is our DP Table which is indexed by a subset bitmap.
 	// It contains the best RelOptInfo struct
 	// (the one with the cheapest total path) for this level.
 	RelOptInfo ** P = (RelOptInfo **) palloc((1 << levels_needed) * sizeof(RelOptInfo *));
 
+	//pthread_mutex_unlock(&mutex);
 	// Initialize DP Table.
 	for(int i = 0; i < (1 << levels_needed); i++){
 		P[i] = NIL;
@@ -323,21 +683,43 @@ void * worker(void * data){
 	}
 
 	// Sort the join_res 2D array on size, in ascending order.
+	//pthread_mutex_lock(&mutex);
 	List * sorted = list_qsort(join_res, ptr_less);
 	list_free(join_res);
 	join_res = sorted;
+	//pthread_mutex_unlock(&mutex);
 
-	for(int i = 0; i < list_length(join_res); i++){
-		List * q = list_nth(join_res, i);
+	if(p_type == 2){
+		for(int i = 0; i < list_length(join_res); i++){
+			List * q = list_nth(join_res, i);
 
-		// For non-singleton admissible subset,
-		// try splits.
-		if(list_length(q) > 1){
-			try_splits(root, q, constr, P, levels_needed);
+			// For non-singleton admissible subset,
+			// try splits.
+			if(list_length(q) > 1){
+			//	pthread_mutex_lock(&mutex);
+				try_splits(root, q, constr, P, levels_needed);
+			//	pthread_mutex_unlock(&mutex);
+			}
 		}
+	}else if (p_type == 3){
+		for(int i = 0; i < list_length(join_res); i++){
+			List * q = list_nth(join_res, i);
+
+			// For non-singleton admissible subset,
+			// try splits.
+			if(list_length(q) > 1){
+			//	pthread_mutex_lock(&mutex);
+				try_splits_b(root, q, constr, P, levels_needed);
+			//	pthread_mutex_unlock(&mutex);
+			}
+		}
+	}else{
+		printf("error : invalid p_type\n");
 	}
 
+
 	// The RelOptInfo which represents the entire set.
+	//pthread_mutex_lock(&mutex);
 	RelOptInfo * best = (RelOptInfo *) palloc(sizeof(RelOptInfo));
 
 	// Copy the best solution and free the DP Table.
@@ -349,13 +731,14 @@ void * worker(void * data){
 	worker_output * opt = (worker_output *) palloc(sizeof(worker_output));
 	opt->optimal = best;
 	opt->root = root;
+	//pthread_mutex_unlock(&mutex);
 	pthread_mutex_unlock(&mutex);
 	return opt;
 }
 
 
 RelOptInfo *
-parallel_join_search (PlannerInfo *root, int levels_needed, List * initial_rels, int n_workers){
+parallel_join_search(PlannerInfo *root, int levels_needed, List * initial_rels, int n_workers, int p_type){
 	// worker thread name.
 	char * name = "parallel join thread";
 
@@ -384,6 +767,7 @@ parallel_join_search (PlannerInfo *root, int levels_needed, List * initial_rels,
 		items[i].initial_rels = initial_rels;
 		items[i].part_id = i;
 		items[i].n_workers = n_workers;
+		items[i].p_type = p_type;
 		int success = pthread_create(&threads[i], NULL, worker, &items[i]);
 		Assert(success == 0);
 	}
@@ -3028,7 +3412,9 @@ make_rel_from_joinlist(PlannerInfo *root, List *joinlist)
 			return geqo(root, levels_needed, initial_rels);
 		else{
 			if(levels_needed % 2 == 0)
-				return parallel_join_search(root, levels_needed, initial_rels, 2);
+				return parallel_join_search(root, levels_needed, initial_rels, 2, 2);
+			else if(levels_needed % 3 == 0)
+				return parallel_join_search(root, levels_needed, initial_rels, 1, 3);
 			else
 				return standard_join_search(root, levels_needed, initial_rels);
 		}

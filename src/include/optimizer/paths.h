@@ -55,7 +55,7 @@ extern RelOptInfo *standard_join_search(PlannerInfo *root, int levels_needed,
 
 //WE DID THIS 160110098 160070013
 extern RelOptInfo *parallel_join_search(PlannerInfo *root, int levels_needed,
-					 List *initial_rels, int n_workers);
+					 List *initial_rels, int n_workers, int p_type);
 
 
 extern void generate_gather_paths(PlannerInfo *root, RelOptInfo *rel,
