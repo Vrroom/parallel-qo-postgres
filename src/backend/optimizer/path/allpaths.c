@@ -71,6 +71,8 @@ typedef struct worker_output {
 	RelOptInfo * optimal;
 } worker_output;
 
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
 // Our Functions
 int ptr_less(const void *, const void *);
 List * constrained_power_set(List *, int, int);
@@ -289,7 +291,7 @@ void try_splits(PlannerInfo *root, List * sub_rels, List * constr, RelOptInfo **
 }
 
 void * worker(void * data){
-
+	pthread_mutex_lock(&mutex);
 	worker_data * wi = (worker_data *) data;
 	PlannerInfo * root = wi->root;
 	List * initial_rels = wi->initial_rels;
@@ -347,6 +349,7 @@ void * worker(void * data){
 	worker_output * opt = (worker_output *) palloc(sizeof(worker_output));
 	opt->optimal = best;
 	opt->root = root;
+	pthread_mutex_unlock(&mutex);
 	return opt;
 }
 
