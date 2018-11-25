@@ -53,6 +53,11 @@ extern void set_dummy_rel_pathlist(RelOptInfo *rel);
 extern RelOptInfo *standard_join_search(PlannerInfo *root, int levels_needed,
 					 List *initial_rels);
 
+//WE DID THIS 160110098 160070013
+extern RelOptInfo *parallel_join_search(PlannerInfo *root, int levels_needed,
+					 List *initial_rels, int n_workers);
+
+
 extern void generate_gather_paths(PlannerInfo *root, RelOptInfo *rel,
 					  bool override_rows);
 extern int compute_parallel_worker(RelOptInfo *rel, double heap_pages,

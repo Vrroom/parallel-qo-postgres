@@ -17,7 +17,6 @@
 
 #include <limits.h>
 #include <math.h>
-#include <glib.h>
 
 #include "access/sysattr.h"
 #include "access/tsmapi.h"
@@ -57,7 +56,7 @@ typedef struct pushdown_safety_info
 	bool		unsafeLeaky;	/* don't push down leaky quals */
 } pushdown_safety_info;
 
-// Sumit's change.
+// Worker Data to be passed to each worker thread.
 typedef struct worker_data{
 	PlannerInfo * root;
 	List * initial_rels;
@@ -66,70 +65,61 @@ typedef struct worker_data{
 	int n_workers;
 } worker_data;
 
-int less (gconstpointer a, gconstpointer b){
-	gint *first = (gint *) a;
-	gint *second = (gint *) b;
-	return *first - *second;
-}
-int ptr_less (gconstpointer a, gconstpointer b){
-	GArray * a1 = *(GArray **) a;
-	GArray * b1 = *(GArray **) b;
-	return a1->len - b1->len;
+// Our Functions
+int ptr_less(const void *, const void *);
+List * constrained_power_set(List *, int, int);
+List * part_constraints(int, int, int);
+List * add_ptrs(List *, List *);
+List * copy_paste(List *, List *);
+List * copy_concat_int(List *, List *);
+List * cartesian_product(List *, List *);
+List * adm_join_results(int, List *);
+void try_splits(PlannerInfo *, List *, List *, RelOptInfo **, int);
+RelOptInfo * worker(void *);
+RelOptInfo * parallel_join_search (PlannerInfo *, int, List *, int);
+
+int ptr_less (const void * a, const void * b){
+	List * one = (List *) lfirst(*(ListCell **) a);
+	List * two = (List *) lfirst(*(ListCell **) b);
+	return list_length(one) - list_length(two);
 }
 
-void add_ptrs(gpointer data, gpointer dest){
-	g_ptr_array_add(dest, data);
-}
-
-// PASSED TO g_hash_table_new_full and g_array_create wala function
-void delete_array(gpointer arr){
-	if(arr != NULL)
-		g_array_free(arr, TRUE);
-}
-
-// Insert b at the end of a
-void combine (GArray * a, GArray * b){
-	for(int i = 0; i < b->len; i++){
-		g_array_append_val(a, g_array_index(b, gint, i));
-	}
-}
 // constr, q1 and q2 are not modified...
-GPtrArray * constrained_power_set(GPtrArray * constr, gint q1, gint q2){
-	GPtrArray * cps = g_ptr_array_new_with_free_func(delete_array);
-	GArray * empty = g_array_new(FALSE, FALSE, sizeof(gint));
-	g_ptr_array_add(cps, empty);
-	gboolean include_q1 = TRUE;
-	gboolean include_q2 = TRUE;
-	for(int i = 0; i < constr->len; i++){
-		GArray * ci = g_ptr_array_index(constr, i);
-		if(g_array_index(ci, gint, 1) == q1)
-			include_q1 = FALSE;
-		else if(g_array_index(ci, gint, 1) == q2)
-			include_q2 = FALSE;
+List * constrained_power_set(List * constr, int q1, int q2){
+	List * cps = NIL;
+	bool include_q1 = true;
+	bool include_q2 = true;
+	for(int i = 0; i < list_length(constr); i++){
+		List * ci = (List *) list_nth(constr, i);
+		if(list_nth_int(ci, 1) == q1)
+			include_q1 = false;
+		else if(list_nth_int(ci, 1) == q2)
+			include_q2 = false;
 	}
 	if(include_q1){
-		GArray * arr = g_array_new(FALSE, FALSE, sizeof(gint));
-		g_array_append_val(arr, q1);
-		g_ptr_array_add(cps, arr);
+		List * arr = NIL;
+		arr = lappend_int(arr, q1);
+		cps = lappend(cps, arr);
 	}
 	if(include_q2){
-		GArray * arr = g_array_new(FALSE, FALSE, sizeof(gint));
-		g_array_append_val(arr, q2);
-		g_ptr_array_add(cps, arr);
+		List * arr = NIL;
+		arr = lappend_int(arr, q2);
+		cps = lappend(cps, arr);
 	}
-	GArray * arr = g_array_new(FALSE, FALSE, sizeof(gint));
-	g_array_append_val(arr, q1);
-	g_array_append_val(arr, q2);
-	g_ptr_array_add(cps, arr);
+	List * arr = NIL;
+	arr = lappend_int(arr, q1);
+	arr = lappend_int(arr, q2);
+	cps = lappend(cps, arr);
+
 	return cps;
 }
 
 // The arguments aren't modified here also
-GPtrArray * part_constraints(int levels_needed, int part_id, int n_workers){
-	GPtrArray * pc = g_ptr_array_new_with_free_func(delete_array);
-	for(gint i = 0; (1 << i) < n_workers; i++){
-		gint select = part_id & (1 << i);
-		gint q1, q2;
+List * part_constraints(int levels_needed, int part_id, int n_workers){
+	List * pc = NIL;
+	for(int i = 0; (1 << i) < n_workers; i++){
+		int select = part_id & (1 << i);
+		int q1, q2;
 		if(select > 0){
 			q1 = 2*i + 1;
 			q2 = 2*i;
@@ -137,97 +127,101 @@ GPtrArray * part_constraints(int levels_needed, int part_id, int n_workers){
 			q1 = 2*i;
 			q2 = 2*i + 1;
 		}
-		GArray * arr = g_array_new(FALSE, FALSE, sizeof(gint));
-		g_array_append_val(arr, q1);
-		g_array_append_val(arr, q2);
-		g_ptr_array_add(pc, arr);
+		List * arr = NIL;
+		arr = lappend_int(arr, q1);
+		arr = lappend_int(arr, q2);
+		pc = lappend(pc, arr);
 	}
 	return pc;
 }
 
-// This will destroy the old instance and return the new instance. Always pass a copy
-GArray * remove_duplicates(GArray * arr){
-	if(arr->len == 0)
-		return arr;
-	g_array_sort(arr, (GCompareFunc) less);
-	GArray * new_arr = g_array_new(FALSE, FALSE, sizeof(gint));
-	g_array_append_val(new_arr, g_array_index(arr, gint, 0));
-	for(guint i = 1, j = 0; i < arr->len; i++){
-		gint tp = g_array_index(new_arr, gint, j);
-		gint cur = g_array_index(arr, gint, i);
-		if(tp != cur){
-			g_array_append_val(new_arr, cur);
-			j++;
-		}
+List * add_ptrs(List * a, List * b){
+	for(int i = 0; i < list_length(b); i++){
+		a = lappend(a, (List *) list_nth(b, i));
 	}
-	g_array_free(arr, TRUE);
-	return new_arr;
+	return a;
 }
 
+List * copy_paste(List * result, List * a){
+	for(int i = 0; i < list_length(a); i++){
+		List * a_cpy = list_copy((List *) list_nth(a, i));
+		result = lappend(result, a_cpy);
+	}
+	return result;
+}
+
+List * copy_concat_int(List * a, List * b){
+	List * result = NIL;
+	for(int i = 0; i < list_length(a); i++){
+		result = lappend_int(result, list_nth_int(a, i));
+	}
+	for(int i = 0; i < list_length(b); i++){
+		result = lappend_int(result, list_nth_int(b, i));
+	}
+	return result;
+}
 
 // Destroy a and b and return there cartesian product. Always pass a copy
-GPtrArray * cartesian_product(GPtrArray * a, GPtrArray * b){
-	GPtrArray * new_arr = g_ptr_array_new_with_free_func((GDestroyNotify) delete_array);
-	for(int i = 0; i < b->len; i++){
-		GPtrArray * uni = g_ptr_array_new();
-		for(int j = 0; j < a->len; j++){
-			GArray * aj_cpy = g_array_new(FALSE, FALSE, sizeof (gint));
-			combine(aj_cpy, g_ptr_array_index(a, j));
-			combine(aj_cpy, g_ptr_array_index(b, i));
-			aj_cpy = remove_duplicates(aj_cpy);
-			g_ptr_array_add(uni, aj_cpy);
-
+List * cartesian_product(List * a, List * b){
+	if(a == NIL)
+		return b;
+	if(b == NIL)
+		return a;
+	List * new_arr = NIL;
+	new_arr = copy_paste(new_arr, a);
+	new_arr = copy_paste(new_arr, b);
+	for(int i = 0; i < list_length(b); i++){
+		List * lunion = NIL;
+		for(int j = 0; j < list_length(a); j++){
+			List * concat = copy_concat_int((List *) list_nth(b, i), (List *) list_nth(a, j));
+			lunion = lappend(lunion, concat);
 		}
-		g_ptr_array_foreach(uni, (GFunc) add_ptrs, new_arr);
-		g_ptr_array_free(uni, TRUE);
+		new_arr = add_ptrs(new_arr, lunion);
+		list_free(lunion);
 	}
-	g_ptr_array_free(a, TRUE);
-	g_ptr_array_free(b, TRUE);
+
+	list_free_deep(a);
+	list_free_deep(b);
 	return new_arr;
 }
 
-GPtrArray * adm_join_results(int levels_needed, GPtrArray * constr){
-	GPtrArray * join_res = g_ptr_array_new_with_free_func((GDestroyNotify) delete_array);
-	GArray * empty = g_array_new(FALSE, FALSE, sizeof(gint));
-	g_ptr_array_add(join_res, empty);
+List * adm_join_results(int levels_needed, List * constr){
+	List * join_res = NIL;
 	for(int i = 0; 2*i + 1 < levels_needed; i++){
-		gint q1 = 2*i;
-		gint q2 = 2*i + 1;
-		GPtrArray * cps = constrained_power_set(constr, q1, q2);
+		int q1 = 2*i;
+		int q2 = 2*i + 1;
+		List * cps = constrained_power_set(constr, q1, q2);
 		join_res = cartesian_product(join_res, cps);
 	}
 	return join_res;
 }
 
 // Due to the bitmap, we are constrained by joins of 32 tables.
-void try_splits(PlannerInfo *root, GArray * sub_rels, GPtrArray * constr, GPtrArray * P, int levels_needed){
+void try_splits(PlannerInfo *root, List * sub_rels, List * constr, RelOptInfo ** P, int levels_needed){
 
 	// Marks those sub_rels which can't be placed on the right
 	// in an admissible join set.
-	GArray * valid = g_array_sized_new(FALSE, FALSE, sizeof(gboolean), levels_needed);
+	bool * valid = (bool *) palloc(levels_needed*sizeof(bool));
 
 	// Marks those sub_rels which are passed in the input.
-	GArray * present = g_array_sized_new(FALSE, FALSE, sizeof(gboolean), levels_needed);
+	bool * present = (bool *) palloc(levels_needed*sizeof(bool));
 
-	gboolean tr = TRUE;
-	gboolean fls = FALSE;
-	gint bitmap = 0;
+	int bitmap = 0;
 
 	// Initialize the two arrays.
 	for(int i = 0; i < levels_needed; i++){
-		g_array_append_val(present, fls);
-		g_array_append_val(valid, tr);
+		valid[i] = true;
+		present[i] = false;
 	}
 
-	for(int i = 0; i < sub_rels->len; i++){
-		gint num = g_array_index(sub_rels, gint, i);
+	for(int i = 0; i < list_length(sub_rels); i++){
+		int num = list_nth_int(sub_rels, i);
 
 		// Fill in the bitmap representing this sub_rel
 		bitmap |= (1 << num);
 
 		// Set those tables which are present in this sub_rel
-		gboolean *bit = &g_array_index(present, gboolean, num);
-		*bit = TRUE;
+		present[num] = true;
 	}
 
 	// Scan the constraints list.
@@ -235,64 +229,60 @@ void try_splits(PlannerInfo *root, GArray * sub_rels, GPtrArray * constr, GPtrAr
 	// RHS are present in the sub_rel, then mark the LHS
 	// as invalid, because it can't appear on the right in
 	// an admissible join order.
-	for(int i = 0; i < constr->len; i++){
+	for(int i = 0; i < list_length(constr); i++){
 
-		GArray * ci = g_ptr_array_index(constr, i);
+		List * ci = (List *) list_nth(constr, i);
 
-		gint q1 = g_array_index(ci, gint, 0);
-		gint q2 = g_array_index(ci, gint, 1);
+		int q1 = list_nth_int(ci, 0);
+		int q2 = list_nth_int(ci, 1);
 
-		if(g_array_index(present, gboolean, q1)
-			&& g_array_index(present, gboolean, q2)){
+		if(present[q1] && present[q2]){
 
-			gboolean *bit = &g_array_index(valid, gboolean, q1);
-			*bit = FALSE;
+			valid[q1] = false;
 
 		}
 	}
 
 	// Search the space of left deep joins by partitioning
 	// this sub_rel into left tree and singleton right.
-	for(int i = 0; i < sub_rels->len; i++){
+	for(int i = 0; i < list_length(sub_rels); i++){
 
 		// The table to keep on the right if possible.
-		gint u = g_array_index(sub_rels, gint, i);
-		if(g_array_index(valid, gboolean, u)){
+		int u = list_nth_int(sub_rels, i);
+		if(valid[u]){
 
-			gint l_bitmp = bitmap & ~(1 << u);
+			int l_bitmp = bitmap & ~(1 << u);
 
 			// Pattern is copied from geqo_eval.c
-			RelOptInfo * l_splt = g_ptr_array_index(P, l_bitmp);
-			RelOptInfo * r_splt = g_ptr_array_index(P, (1 << u));
+			RelOptInfo * l_splt = P[l_bitmp];
+			RelOptInfo * r_splt = P[1 << u];
 			RelOptInfo * join_rel = make_join_rel(root, l_splt, r_splt);
 
 			if(join_rel){
 
 				generate_partitionwise_join_paths(root, join_rel);
 
-				if(sub_rels->len != levels_needed)
+				if(list_length(sub_rels) != levels_needed)
 					generate_gather_paths(root, join_rel, false);
 
 				set_cheapest(join_rel);
 			}
 
 			// Set the better result in the DP Table
-			RelOptInfo ** better = (RelOptInfo **) &g_ptr_array_index(P, bitmap);
-
 			// Lower cost is better.
-			if(*better == NULL){
-				*better = join_rel;
-			}else if((*better)->cheapest_total_path->total_cost > join_rel->cheapest_total_path->total_cost){
-				*better = join_rel;
+			if(P[bitmap] == NULL){
+				P[bitmap] = join_rel;
+			}else if(P[bitmap]->cheapest_total_path->total_cost > join_rel->cheapest_total_path->total_cost){
+				P[bitmap] = join_rel;
 			}
 		}
 	}
 
-	g_array_free(valid, TRUE);
-	g_array_free(present, TRUE);
+	pfree(valid);
+	pfree(present);
 }
 
-gpointer worker(gpointer data){
+RelOptInfo * worker(void * data){
 
 	worker_data * wi = (worker_data *) data;
 	PlannerInfo * root = wi->root;
@@ -302,53 +292,52 @@ gpointer worker(gpointer data){
 	int n_workers = wi->n_workers;
 
 	// Get the relevant constraints for this worker using part_id.
-	GPtrArray * constr =  part_constraints(levels_needed, part_id, n_workers);
+	List * constr =  part_constraints(levels_needed, part_id, n_workers);
 
 	// Given the set of constraints, populate this array of arrays
 	// with the possible intermediate results.
-	GPtrArray * join_res = adm_join_results(levels_needed, constr);
+	List * join_res = adm_join_results(levels_needed, constr);
 
 	// This is our DP Table which is indexed by a subset bitmap.
 	// It contains the best RelOptInfo struct
 	// (the one with the cheapest total path) for this level.
-	GPtrArray * P = g_ptr_array_sized_new((1 << levels_needed));
+	RelOptInfo ** P = (RelOptInfo **) palloc((1 << levels_needed) * sizeof(RelOptInfo *));
 
 	// Initialize DP Table.
 	for(int i = 0; i < (1 << levels_needed); i++){
-		g_ptr_array_add(P, 0);
+		P[i] = NIL;
 	}
 
 	// For singleton subsets, just fill with the ith initial_rels.
 	for(int i = 0; i < levels_needed; i++){
-
-		RelOptInfo * base_rel = (RelOptInfo *) list_nth(initial_rels, i);
-
 		// This is the only way I found to set values in an array.
-		RelOptInfo ** arr_at_ind;
-		arr_at_ind = (RelOptInfo **) &g_ptr_array_index(P,(1 << i));
-		*arr_at_ind = base_rel;
-
+		P[1 << i] = (RelOptInfo *) list_nth(initial_rels, i);
 	}
 
 	// Sort the join_res 2D array on size, in ascending order.
-	g_ptr_array_sort(join_res, ptr_less);
+	List * sorted = list_qsort(join_res, ptr_less);
+	list_free(join_res);
+	join_res = sorted;
 
-	for(int i = 0; i < join_res->len; i++){
-		GArray * q = g_ptr_array_index(join_res, i);
+	for(int i = 0; i < list_length(join_res); i++){
+		List * q = list_nth(join_res, i);
 
-		// For non-singleton admissable subset,
+		// For non-singleton admissible subset,
 		// try splits.
-		if(q->len > 1){
+		if(list_length(q) > 1){
 			try_splits(root, q, constr, P, levels_needed);
 		}
 	}
 
 	// The RelOptInfo which represents the entire set.
-	RelOptInfo * best = g_ptr_array_index(P, ((1 << levels_needed) - 1));
+	RelOptInfo * best = (RelOptInfo *) palloc(sizeof(RelOptInfo));
 
-	g_ptr_array_free(P, FALSE);
-	g_ptr_array_free(join_res, TRUE);
-	g_ptr_array_free(constr, TRUE);
+	// Copy the best solution and free the DP Table.
+	*best= *(P[(1 << levels_needed) - 1]);
+	pfree(P);
+
+	list_free_deep(join_res);
+	list_free_deep(constr);
 
 	return best;
 }
@@ -357,13 +346,13 @@ gpointer worker(gpointer data){
 RelOptInfo *
 parallel_join_search (PlannerInfo *root, int levels_needed, List * initial_rels, int n_workers){
 	// Empty string is the name assigned to each thread.
-	gchar * name = "";
+	// char * name = "";
 
 	// Array of threads to refer back to while joining.
-	GPtrArray * threads = g_ptr_array_new();
+	//GPtrArray * threads = g_ptr_array_new();
 
 	// The individual worker information that needs to be passed.
-	worker_data * items = (worker_data *) g_malloc(levels_needed*sizeof(worker_data));
+	worker_data * items = (worker_data *) palloc(levels_needed*sizeof(worker_data));
 
 	// There are obvious concurrency bugs because all workers are gonna
 	// modify the same RelOptInfo struct and possibly the PlannerInfo as well.
@@ -388,15 +377,15 @@ parallel_join_search (PlannerInfo *root, int levels_needed, List * initial_rels,
 
 	// Join threads and extract individual results.
 	// Set the best path.
-	for(int i = 1; i < threads->len; i++){
+	/*for(int i = 1; i < threads->len; i++){
 		RelOptInfo * that = (RelOptInfo *) g_thread_join(g_ptr_array_index(threads, i));
 		Path *that_path = that->cheapest_total_path;
 		Path *best_path = best->cheapest_total_path;
 		if(that_path->total_cost < best_path->total_cost){
 			best = that;
 		}
-	}
-	g_free(items);
+	}*/
+	pfree(items);
 	return best;
 }
 
