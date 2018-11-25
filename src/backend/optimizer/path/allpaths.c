@@ -17,6 +17,7 @@
 
 #include <limits.h>
 #include <math.h>
+#include <glib.h>
 
 #include "access/sysattr.h"
 #include "access/tsmapi.h"
@@ -65,6 +66,11 @@ typedef struct worker_data{
 	int n_workers;
 } worker_data;
 
+typedef struct worker_output {
+	PlannerInfo * root;
+	RelOptInfo * optimal;
+} worker_output;
+
 // Our Functions
 int ptr_less(const void *, const void *);
 List * constrained_power_set(List *, int, int);
@@ -75,7 +81,7 @@ List * copy_concat_int(List *, List *);
 List * cartesian_product(List *, List *);
 List * adm_join_results(int, List *);
 void try_splits(PlannerInfo *, List *, List *, RelOptInfo **, int);
-RelOptInfo * worker(void *);
+void * worker(void *);
 RelOptInfo * parallel_join_search (PlannerInfo *, int, List *, int);
 
 int ptr_less (const void * a, const void * b){
@@ -282,7 +288,7 @@ void try_splits(PlannerInfo *root, List * sub_rels, List * constr, RelOptInfo **
 	pfree(present);
 }
 
-RelOptInfo * worker(void * data){
+void * worker(void * data){
 
 	worker_data * wi = (worker_data *) data;
 	PlannerInfo * root = wi->root;
@@ -338,55 +344,71 @@ RelOptInfo * worker(void * data){
 
 	list_free_deep(join_res);
 	list_free_deep(constr);
-
-	return best;
+	worker_output * opt = (worker_output *) palloc(sizeof(worker_output));
+	opt->optimal = best;
+	opt->root = root;
+	return opt;
 }
 
 
 RelOptInfo *
 parallel_join_search (PlannerInfo *root, int levels_needed, List * initial_rels, int n_workers){
-	// Empty string is the name assigned to each thread.
-	// char * name = "";
+	// worker thread name.
+	char * name = "parallel join thread";
 
 	// Array of threads to refer back to while joining.
-	//GPtrArray * threads = g_ptr_array_new();
-
+	pthread_t * threads = (pthread_t *) palloc(n_workers * sizeof(pthread_t));
 	// The individual worker information that needs to be passed.
 	worker_data * items = (worker_data *) palloc(levels_needed*sizeof(worker_data));
 
-	// There are obvious concurrency bugs because all workers are gonna
-	// modify the same RelOptInfo struct and possibly the PlannerInfo as well.
-	// We'll take care of this later by passing copies.
-	// Hopefully that should work.
-	RelOptInfo * best;
+	// To ensure reliable concurrency, we will pass a copy of the
+	// root to each worker. Now each worker may/may not modify
+	// this copy. Finally the output returned by each worker
+	// is a tuple of PlannerInfo * and RelOptInfo *.
+	// If the RelOptInfo found by this worker is indeed the best
+	// then we copy back its PlannerInfo back into the root.
+	// This may not be necessary if the worker doesn't modify
+	// the PlannerInfo but we don't know that.
+
 	for(int i = 0; i < n_workers; i++){
 
 		// Add relevant info for this worker.
-		items[i].root = root;
+		PlannerInfo * root_cpy = (PlannerInfo *) palloc(sizeof(PlannerInfo));
+		*root_cpy = *root;
+
+		items[i].root = root_cpy;
 		items[i].levels_needed = levels_needed;
 		items[i].initial_rels = initial_rels;
 		items[i].part_id = i;
 		items[i].n_workers = n_workers;
-		best = (RelOptInfo *) worker(&items[i]);
-		// Start a new thread with this information.
-		//GThread * t = g_thread_new(name, worker, &items[i]);
-		//g_ptr_array_add(threads, t);
+		int success = pthread_create(&threads[i], NULL, worker, &items[i]);
+		Assert(success == 0);
 	}
+	worker_output * best = (worker_output *) palloc(sizeof(worker_output));
+	//RelOptInfo * best = (RelOptInfo *) palloc(sizeof(RelOptInfo));
+	int join_success = pthread_join(threads[0], &best);
 
-	//RelOptInfo * best = (RelOptInfo *) g_thread_join(g_ptr_array_index(threads, 0));
-
+	RelOptInfo * optimal = best->optimal;
+	*root = *(best->root);
+	Assert(join_success == 0);
 	// Join threads and extract individual results.
 	// Set the best path.
-	/*for(int i = 1; i < threads->len; i++){
-		RelOptInfo * that = (RelOptInfo *) g_thread_join(g_ptr_array_index(threads, i));
-		Path *that_path = that->cheapest_total_path;
-		Path *best_path = best->cheapest_total_path;
+	for(int i = 1; i < n_workers; i++){
+		worker_output * that = (worker_output *) palloc (sizeof(worker_output));
+		//RelOptInfo * that = (RelOptInfo *) palloc(sizeof(RelOptInfo));
+		join_success = pthread_join(threads[i], &that);
+		Assert(join_success == 0);
+
+		Path *that_path = that->optimal->cheapest_total_path;
+		Path *best_path = best->optimal->cheapest_total_path;
+
 		if(that_path->total_cost < best_path->total_cost){
-			best = that;
+			optimal = that->optimal;
+			*root = *(that->root);
 		}
-	}*/
+	}
 	pfree(items);
-	return best;
+	return optimal;
 }
 
 /* These parameters are set by GUC */
@@ -3001,8 +3023,12 @@ make_rel_from_joinlist(PlannerInfo *root, List *joinlist)
 			return (*join_search_hook) (root, levels_needed, initial_rels);
 		else if (enable_geqo && levels_needed >= geqo_threshold)
 			return geqo(root, levels_needed, initial_rels);
-		else
-			return parallel_join_search(root, levels_needed, initial_rels, 1);
+		else{
+			if(levels_needed % 2 == 0)
+				return parallel_join_search(root, levels_needed, initial_rels, 2);
+			else
+				return standard_join_search(root, levels_needed, initial_rels);
+		}
 	}
 }
 
