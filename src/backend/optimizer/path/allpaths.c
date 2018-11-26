@@ -638,7 +638,7 @@ void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, RelOptInfo
 
 
 void * worker(void * data){
-	pthread_mutex_lock(&mutex);
+	//pthread_mutex_lock(&mutex);
 	worker_data * wi = (worker_data *) data;
 	PlannerInfo * root = wi->root;
 	List * initial_rels = wi->initial_rels;
@@ -732,7 +732,7 @@ void * worker(void * data){
 	opt->optimal = best;
 	opt->root = root;
 	//pthread_mutex_unlock(&mutex);
-	pthread_mutex_unlock(&mutex);
+	//pthread_mutex_unlock(&mutex);
 	return opt;
 }
 

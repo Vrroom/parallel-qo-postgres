@@ -934,11 +934,11 @@ palloc(Size size)
 	if (!AllocSizeIsValid(size))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
-	//pthread_mutex_lock(&mutex1);
+	pthread_mutex_lock(&mutex1);
 	context->isReset = false;
 
 	ret = context->methods->alloc(context, size);
-	//pthread_mutex_unlock(&mutex1);
+	pthread_mutex_unlock(&mutex1);
 	if (unlikely(ret == NULL))
 	{
 		MemoryContextStats(TopMemoryContext);
@@ -967,11 +967,11 @@ palloc0(Size size)
 	if (!AllocSizeIsValid(size))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
-	//pthread_mutex_lock(&mutex1);
+	pthread_mutex_lock(&mutex1);
 	context->isReset = false;
 
 	ret = context->methods->alloc(context, size);
-	//pthread_mutex_unlock(&mutex1);
+	pthread_mutex_unlock(&mutex1);
 	if (unlikely(ret == NULL))
 	{
 		MemoryContextStats(TopMemoryContext);
@@ -1003,11 +1003,11 @@ palloc_extended(Size size, int flags)
 		((flags & MCXT_ALLOC_HUGE) == 0 && !AllocSizeIsValid(size)))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
-	//pthread_mutex_lock(&mutex1);
+	pthread_mutex_lock(&mutex1);
 	context->isReset = false;
 
 	ret = context->methods->alloc(context, size);
-	//pthread_mutex_unlock(&mutex1);
+	pthread_mutex_unlock(&mutex1);
 
 	if (unlikely(ret == NULL))
 	{
@@ -1039,10 +1039,10 @@ void
 pfree(void *pointer)
 {
 	MemoryContext context = GetMemoryChunkContext(pointer);
-	//pthread_mutex_lock(&mutex1);
+	pthread_mutex_lock(&mutex1);
 
 	context->methods->free_p(context, pointer);
-	//pthread_mutex_unlock(&mutex1);
+	pthread_mutex_unlock(&mutex1);
 
 	VALGRIND_MEMPOOL_FREE(context, pointer);
 }
@@ -1065,10 +1065,10 @@ repalloc(void *pointer, Size size)
 	/* isReset must be false already */
 	Assert(!context->isReset);
 
-	//pthread_mutex_lock(&mutex1);
+	pthread_mutex_lock(&mutex1);
 
 	ret = context->methods->realloc(context, pointer, size);
-	//pthread_mutex_unlock(&mutex1);
+	pthread_mutex_unlock(&mutex1);
 
 	if (unlikely(ret == NULL))
 	{
@@ -1102,12 +1102,12 @@ MemoryContextAllocHuge(MemoryContext context, Size size)
 	if (!AllocHugeSizeIsValid(size))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
-	//pthread_mutex_lock(&mutex1);
+	pthread_mutex_lock(&mutex1);
 
 	context->isReset = false;
 
 	ret = context->methods->alloc(context, size);
-	//pthread_mutex_unlock(&mutex1);
+	pthread_mutex_unlock(&mutex1);
 
 	if (unlikely(ret == NULL))
 	{
@@ -1142,10 +1142,10 @@ repalloc_huge(void *pointer, Size size)
 
 	/* isReset must be false already */
 	Assert(!context->isReset);
-	//pthread_mutex_lock(&mutex1);
+	pthread_mutex_lock(&mutex1);
 
 	ret = context->methods->realloc(context, pointer, size);
-	//pthread_mutex_unlock(&mutex1);
+	pthread_mutex_unlock(&mutex1);
 
 	if (unlikely(ret == NULL))
 	{
