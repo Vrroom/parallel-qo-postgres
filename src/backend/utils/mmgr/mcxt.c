@@ -925,6 +925,7 @@ void *
 palloc(Size size)
 {
 	/* duplicates MemoryContextAlloc to avoid increased overhead */
+	pthread_mutex_lock(&mutex1);
 	void	   *ret;
 	MemoryContext context = CurrentMemoryContext;
 
@@ -934,11 +935,11 @@ palloc(Size size)
 	if (!AllocSizeIsValid(size))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
-	pthread_mutex_lock(&mutex1);
+
 	context->isReset = false;
 
 	ret = context->methods->alloc(context, size);
-	pthread_mutex_unlock(&mutex1);
+
 	if (unlikely(ret == NULL))
 	{
 		MemoryContextStats(TopMemoryContext);
@@ -950,13 +951,14 @@ palloc(Size size)
 	}
 
 	VALGRIND_MEMPOOL_ALLOC(context, ret, size);
-
+	pthread_mutex_unlock(&mutex1);
 	return ret;
 }
 
 void *
 palloc0(Size size)
 {
+	pthread_mutex_lock(&mutex1);
 	/* duplicates MemoryContextAllocZero to avoid increased overhead */
 	void	   *ret;
 	MemoryContext context = CurrentMemoryContext;
@@ -967,11 +969,11 @@ palloc0(Size size)
 	if (!AllocSizeIsValid(size))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
-	pthread_mutex_lock(&mutex1);
+
 	context->isReset = false;
 
 	ret = context->methods->alloc(context, size);
-	pthread_mutex_unlock(&mutex1);
+
 	if (unlikely(ret == NULL))
 	{
 		MemoryContextStats(TopMemoryContext);
@@ -985,7 +987,7 @@ palloc0(Size size)
 	VALGRIND_MEMPOOL_ALLOC(context, ret, size);
 
 	MemSetAligned(ret, 0, size);
-
+	pthread_mutex_unlock(&mutex1);
 	return ret;
 }
 
@@ -993,6 +995,7 @@ void *
 palloc_extended(Size size, int flags)
 {
 	/* duplicates MemoryContextAllocExtended to avoid increased overhead */
+	pthread_mutex_lock(&mutex1);
 	void	   *ret;
 	MemoryContext context = CurrentMemoryContext;
 
@@ -1003,11 +1006,11 @@ palloc_extended(Size size, int flags)
 		((flags & MCXT_ALLOC_HUGE) == 0 && !AllocSizeIsValid(size)))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
-	pthread_mutex_lock(&mutex1);
+
 	context->isReset = false;
 
 	ret = context->methods->alloc(context, size);
-	pthread_mutex_unlock(&mutex1);
+
 
 	if (unlikely(ret == NULL))
 	{
@@ -1027,7 +1030,7 @@ palloc_extended(Size size, int flags)
 
 	if ((flags & MCXT_ALLOC_ZERO) != 0)
 		MemSetAligned(ret, 0, size);
-
+	pthread_mutex_unlock(&mutex1);
 	return ret;
 }
 
@@ -1038,8 +1041,9 @@ palloc_extended(Size size, int flags)
 void
 pfree(void *pointer)
 {
-	MemoryContext context = GetMemoryChunkContext(pointer);
 	pthread_mutex_lock(&mutex1);
+	MemoryContext context = GetMemoryChunkContext(pointer);
+
 
 	context->methods->free_p(context, pointer);
 	pthread_mutex_unlock(&mutex1);
@@ -1054,6 +1058,7 @@ pfree(void *pointer)
 void *
 repalloc(void *pointer, Size size)
 {
+	pthread_mutex_lock(&mutex1);
 	MemoryContext context = GetMemoryChunkContext(pointer);
 	void	   *ret;
 
@@ -1065,10 +1070,10 @@ repalloc(void *pointer, Size size)
 	/* isReset must be false already */
 	Assert(!context->isReset);
 
-	pthread_mutex_lock(&mutex1);
+
 
 	ret = context->methods->realloc(context, pointer, size);
-	pthread_mutex_unlock(&mutex1);
+
 
 	if (unlikely(ret == NULL))
 	{
@@ -1082,6 +1087,7 @@ repalloc(void *pointer, Size size)
 
 	VALGRIND_MEMPOOL_CHANGE(context, pointer, ret, size);
 
+	pthread_mutex_unlock(&mutex1);
 	return ret;
 }
 
@@ -1132,6 +1138,7 @@ MemoryContextAllocHuge(MemoryContext context, Size size)
 void *
 repalloc_huge(void *pointer, Size size)
 {
+	pthread_mutex_lock(&mutex1);
 	MemoryContext context = GetMemoryChunkContext(pointer);
 	void	   *ret;
 
@@ -1142,10 +1149,10 @@ repalloc_huge(void *pointer, Size size)
 
 	/* isReset must be false already */
 	Assert(!context->isReset);
-	pthread_mutex_lock(&mutex1);
+
 
 	ret = context->methods->realloc(context, pointer, size);
-	pthread_mutex_unlock(&mutex1);
+
 
 	if (unlikely(ret == NULL))
 	{
@@ -1158,7 +1165,7 @@ repalloc_huge(void *pointer, Size size)
 	}
 
 	VALGRIND_MEMPOOL_CHANGE(context, pointer, ret, size);
-
+	pthread_mutex_unlock(&mutex1);
 	return ret;
 }
 

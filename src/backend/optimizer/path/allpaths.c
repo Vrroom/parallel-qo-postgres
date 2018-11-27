@@ -638,7 +638,7 @@ void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, RelOptInfo
 
 
 void * worker(void * data){
-	//pthread_mutex_lock(&mutex);
+	pthread_mutex_lock(&mutex);
 	worker_data * wi = (worker_data *) data;
 	PlannerInfo * root = wi->root;
 	List * initial_rels = wi->initial_rels;
@@ -696,9 +696,9 @@ void * worker(void * data){
 			// For non-singleton admissible subset,
 			// try splits.
 			if(list_length(q) > 1){
-			//	pthread_mutex_lock(&mutex);
+				//pthread_mutex_lock(&mutex);
 				try_splits(root, q, constr, P, levels_needed);
-			//	pthread_mutex_unlock(&mutex);
+				//pthread_mutex_unlock(&mutex);
 			}
 		}
 	}else if (p_type == 3){
@@ -708,9 +708,9 @@ void * worker(void * data){
 			// For non-singleton admissible subset,
 			// try splits.
 			if(list_length(q) > 1){
-			//	pthread_mutex_lock(&mutex);
+				//pthread_mutex_lock(&mutex);
 				try_splits_b(root, q, constr, P, levels_needed);
-			//	pthread_mutex_unlock(&mutex);
+				//pthread_mutex_unlock(&mutex);
 			}
 		}
 	}else{
@@ -731,8 +731,7 @@ void * worker(void * data){
 	worker_output * opt = (worker_output *) palloc(sizeof(worker_output));
 	opt->optimal = best;
 	opt->root = root;
-	//pthread_mutex_unlock(&mutex);
-	//pthread_mutex_unlock(&mutex);
+	pthread_mutex_unlock(&mutex);
 	return opt;
 }
 
@@ -3412,9 +3411,9 @@ make_rel_from_joinlist(PlannerInfo *root, List *joinlist)
 			return geqo(root, levels_needed, initial_rels);
 		else{
 			if(levels_needed % 2 == 0)
-				return parallel_join_search(root, levels_needed, initial_rels, 2, 2);
+				return parallel_join_search(root, levels_needed, initial_rels, 4, 2);
 			else if(levels_needed % 3 == 0)
-				return parallel_join_search(root, levels_needed, initial_rels, 1, 3);
+				return parallel_join_search(root, levels_needed, initial_rels, 4, 3);
 			else
 				return standard_join_search(root, levels_needed, initial_rels);
 		}
