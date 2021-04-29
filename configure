@@ -715,6 +715,9 @@ with_gssapi
 with_python
 with_perl
 with_tcl
+GLIB_LIBS
+GLIB_CFLAGS
+with_glib
 ICU_LIBS
 ICU_CFLAGS
 PKG_CONFIG_LIBDIR
@@ -842,6 +845,7 @@ enable_depend
 enable_cassert
 enable_thread_safety
 with_icu
+with_glib
 with_tcl
 with_tclconfig
 with_perl
@@ -887,6 +891,8 @@ PKG_CONFIG_PATH
 PKG_CONFIG_LIBDIR
 ICU_CFLAGS
 ICU_LIBS
+GLIB_CFLAGS
+GLIB_LIBS
 LDFLAGS_EX
 LDFLAGS_SL'
 
@@ -1541,6 +1547,7 @@ Optional Packages:
   --with-CC=CMD           set compiler (deprecated)
   --with-llvm             build with LLVM based JIT support
   --with-icu              build with ICU support
+  --with-glib             build with GLIB support
   --with-tcl              build Tcl modules (PL/Tcl)
   --with-tclconfig=DIR    tclConfig.sh is in DIR
   --with-perl             build Perl modules (PL/Perl)
@@ -1587,6 +1594,8 @@ Some influential environment variables:
               path overriding pkg-config's built-in search path
   ICU_CFLAGS  C compiler flags for ICU, overriding pkg-config
   ICU_LIBS    linker flags for ICU, overriding pkg-config
+  GLIB_CFLAGS C compiler flags for GLIB, overriding pkg-config
+  GLIB_LIBS   linker flags for GLIB, overriding pkg-config
   LDFLAGS_EX  extra linker flags for linking executables only
   LDFLAGS_SL  extra linker flags for linking shared libraries only
 
@@ -4318,13 +4327,13 @@ if test "$ac_test_CFLAGS" = set; then
   CFLAGS=$ac_save_CFLAGS
 elif test $ac_cv_prog_cc_g = yes; then
   if test "$GCC" = yes; then
-    CFLAGS="-g"
+    CFLAGS="-g -O2"
   else
     CFLAGS="-g"
   fi
 else
   if test "$GCC" = yes; then
-    CFLAGS="-g"
+    CFLAGS="-O2"
   else
     CFLAGS=
   fi
@@ -4665,13 +4674,13 @@ if test "$ac_test_CXXFLAGS" = set; then
   CXXFLAGS=$ac_save_CXXFLAGS
 elif test $ac_cv_prog_cxx_g = yes; then
   if test "$GXX" = yes; then
-    CXXFLAGS="-g"
+    CXXFLAGS="-g -O2"
   else
     CXXFLAGS="-g"
   fi
 else
   if test "$GXX" = yes; then
-    CXXFLAGS="-g"
+    CXXFLAGS="-O2"
   else
     CXXFLAGS=
   fi
@@ -5069,7 +5078,7 @@ unset CXXFLAGS
 # If the user specifies something in the environment, that is used.
 # else:  If the template file set something, that is used.
 # else:  If coverage was enabled, don't set anything.
-# else:  If the compiler is GCC, then we use -O0.
+# else:  If the compiler is GCC, then we use -O2.
 # else:  If the compiler is something else, then we use -O, unless debugging.
 
 if test "$ac_env_CFLAGS_set" = set; then
@@ -5079,11 +5088,11 @@ elif test "${CFLAGS+set}" = set; then
 elif test "$enable_coverage" = yes; then
   : # no optimization by default
 elif test "$GCC" = yes; then
-  CFLAGS="-g"
+  CFLAGS="-O2"
 else
   # if the user selected debug mode, don't use -O
   if test "$enable_debug" != yes; then
-    CFLAGS="-g"
+    CFLAGS="-O"
   fi
 fi
 
@@ -5094,15 +5103,15 @@ elif test "${CXXFLAGS+set}" = set; then
 elif test "$enable_coverage" = yes; then
   : # no optimization by default
 elif test "$GCC" = yes; then
-  CXXFLAGS="-g"
+  CXXFLAGS="-O2"
 else
   # if the user selected debug mode, don't use -O
   if test "$enable_debug" != yes; then
-    CXXFLAGS="-g"
+    CXXFLAGS="-O"
   fi
 fi
 
-# When generating bitcode (for inlining) we always want to use -O0
+# When generating bitcode (for inlining) we always want to use -O2
 # even when --enable-debug is specified. The bitcode it's not going to
 # be used for line-by-line debugging, and JIT inlining doesn't work
 # without at least -O1 (otherwise clang will emit 'noinline'
@@ -5111,12 +5120,12 @@ fi
 if test "$ac_env_BITCODE_CFLAGS_set" = set; then
   BITCODE_CFLAGS=$ac_env_BITCODE_CFLAGS_value
 else
-  BITCODE_CFLAGS="-O0 $BITCODE_CFLAGS"
+  BITCODE_CFLAGS="-O2 $BITCODE_CFLAGS"
 fi
 if test "$ac_env_BITCODE_CXXFLAGS_set" = set; then
   BITCODE_CXXFLAGS=$ac_env_BITCODE_CXXFLAGS_value
 else
-  BITCODE_CXXFLAGS="-O0 $BITCODE_CXXFLAGS"
+  BITCODE_CXXFLAGS="-O2 $BITCODE_CXXFLAGS"
 fi
 
 # C[XX]FLAGS we determined above will be added back at the end
@@ -7321,6 +7330,135 @@ fi
 fi
 
 #
+# GLIB
+#
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with GLIB support" >&5
+$as_echo_n "checking whether to build with GLIB support... " >&6; }
+
+
+
+# Check whether --with-glib was given.
+if test "${with_glib+set}" = set; then :
+  withval=$with_glib;
+  case $withval in
+    yes)
+
+$as_echo "#define USE_GLIB 1" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-glib option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  with_glib=no
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_glib" >&5
+$as_echo "$with_glib" >&6; }
+
+
+if test "$with_glib" = yes; then
+
+pkg_failed=no
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for glib-2.0" >&5
+$as_echo_n "checking for glib-2.0... " >&6; }
+
+if test -n "$GLIB_CFLAGS"; then
+    pkg_cv_GLIB_CFLAGS="$GLIB_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"glib-2.0\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "glib-2.0") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_GLIB_CFLAGS=`$PKG_CONFIG --cflags "glib-2.0" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+if test -n "$GLIB_LIBS"; then
+    pkg_cv_GLIB_LIBS="$GLIB_LIBS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"glib-2.0\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "glib-2.0") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_GLIB_LIBS=`$PKG_CONFIG --libs "glib-2.0" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+
+
+
+if test $pkg_failed = yes; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
+        _pkg_short_errors_supported=yes
+else
+        _pkg_short_errors_supported=no
+fi
+        if test $_pkg_short_errors_supported = yes; then
+	        GLIB_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "glib-2.0" 2>&1`
+        else
+	        GLIB_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "glib-2.0" 2>&1`
+        fi
+	# Put the nasty error message in config.log where it belongs
+	echo "$GLIB_PKG_ERRORS" >&5
+
+	as_fn_error $? "Package requirements (glib-2.0) were not met:
+
+$GLIB_PKG_ERRORS
+
+Consider adjusting the PKG_CONFIG_PATH environment variable if you
+installed software in a non-standard prefix.
+
+Alternatively, you may set the environment variables GLIB_CFLAGS
+and GLIB_LIBS to avoid the need to call pkg-config.
+See the pkg-config man page for more details." "$LINENO" 5
+elif test $pkg_failed = untried; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+	{ { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
+$as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
+as_fn_error $? "The pkg-config script could not be found or is too old.  Make sure it
+is in your PATH or set the PKG_CONFIG environment variable to the full
+path to pkg-config.
+
+Alternatively, you may set the environment variables GLIB_CFLAGS
+and GLIB_LIBS to avoid the need to call pkg-config.
+See the pkg-config man page for more details.
+
+To get pkg-config, see <http://pkg-config.freedesktop.org/>.
+See \`config.log' for more details" "$LINENO" 5; }
+else
+	GLIB_CFLAGS=$pkg_cv_GLIB_CFLAGS
+	GLIB_LIBS=$pkg_cv_GLIB_LIBS
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+
+fi
+fi
+
+#
 # Optionally build Tcl modules (PL/Tcl)
 #
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with Tcl" >&5
@@ -8272,8 +8410,10 @@ rm -f conftest*
 # Assignments
 #
 
-CPPFLAGS="$CPPFLAGS $INCLUDES "
-LDFLAGS="$LDFLAGS $LIBDIRS "
+CPPFLAGS="$CPPFLAGS $INCLUDES"
+LDFLAGS="$LDFLAGS $LIBDIRS"
+
+
 
 
 
@@ -15859,6 +15999,22 @@ fi
 
 
   CPPFLAGS=$ac_save_CPPFLAGS
+fi
+
+if test "$with_glib" = yes; then
+  ac_save_CPPFLAGS=$CPPFLAGS
+  CPPFLAGS="$GLIB_CFLAGS $CPPFLAGS"
+
+  # Verify we have ICU's header files
+  ac_fn_c_check_header_mongrel "$LINENO" "glib.h" "ac_cv_header_glib_h" "$ac_includes_default"
+if test "x$ac_cv_header_glib_h" = xyes; then :
+
+else
+  as_fn_error $? "header file <glib.h> is required for GLIB" "$LINENO" 5
+fi
+
+
+
 fi
 
 # Lastly, restore full LIBS list and check for readline/libedit symbols
