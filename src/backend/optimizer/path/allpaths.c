@@ -56,32 +56,41 @@ typedef struct pushdown_safety_info
 	bool		unsafeLeaky;	/* don't push down leaky quals */
 } pushdown_safety_info;
 
-// Worker Data to be passed to each worker thread.
+/* data passed to each worker thread */
 typedef struct worker_data{
-	PlannerInfo * root;
-	List * initial_rels;
-	int levels_needed;
-	int part_id;
-	int n_workers;
-	int p_type;
+	PlannerInfo * root;  /* data structure containing plan info */
+	List * initial_rels; /* list of jointree items */
+	int levels_needed;   /* number of initial jointree items in query*/
+	int part_id;         /* which partition is current worker dealing with */
+	int n_workers;       /* total number of workers */ 
+	int p_type;          /* type of plan, linear (2) or bushy (3) */
 } worker_data;
 
 typedef struct worker_output {
-	PlannerInfo * root;
-	RelOptInfo * optimal;
+	PlannerInfo * root;   /* data structure containing plan info */
+	RelOptInfo * optimal; /* optimal plan */
 } worker_output;
 
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+/**
+ * Postgres is written assuming a single threaded process space.
+ * This sort of throws the spanner into our works. To implement
+ * the no-shared algorithm as a proof of concept, we use a 
+ * mutex lock to run each worker thread sequentially. Of course,
+ * we don't get any parallelism benefit anymore. 
+ */
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; 
 
 // Our Functions
 int ptr_less(const void *, const void *);
 static List * constrained_power_set(List *, int, int);
+static List * constrained_power_set_b(List *, int, int, int);
 static List * part_constraints(int, int, int);
 List * add_ptrs(List *, List *);
 List * copy_paste(List *, List *);
 List * copy_concat_int(List *, List *);
 List * cartesian_product(List *, List *);
-List * adm_join_results(int, List *);
+static List * adm_join_results(int, List *);
+static List * adm_join_results_b(int, List *);
 void try_splits(PlannerInfo *, List *, List *, RelOptInfo **, int);
 void * worker(void *);
 RelOptInfo * parallel_join_search (PlannerInfo *, int, List *, int, int);
@@ -92,7 +101,19 @@ int ptr_less (const void * a, const void * b){
 	return list_length(one) - list_length(two);
 }
 
-// constr, q1 and q2 are not modified...
+/**
+ * Generate the power set for {q1, q2} which
+ * respects the constraints in constr. The power 
+ * sets are essentially permissible intermediate
+ * join results. 
+ *
+ * Hence if q1 < q2 is a constraint, then no
+ * intermediate join result can have just q2 and 
+ * not q1. For such a constraint, {q2} is eliminated 
+ * from the power set of {q1, q2}.
+ *
+ * constr, q1 and q2 are not modified.
+ */
 static List * constrained_power_set(List * constr, int q1, int q2){
 	List * cps = NIL;
 	bool include_q1 = true;
@@ -125,8 +146,6 @@ static List * constrained_power_set(List * constr, int q1, int q2){
 // changed for bushy tree joins
 static List * constrained_power_set_b(List * constr, int q1, int q2, int q3){
 	List * cps = NIL;
-	//	GArray * empty = g_array_new(FALSE, FALSE, sizeof(gint));
-	//	g_ptr_array_add(cps, empty);
 	// size 1 elems of power(S) and {1, 2} in S
 	List * arr1 = NIL;
 	arr1 = lappend_int(arr1, q1);
@@ -174,8 +193,31 @@ static List * constrained_power_set_b(List * constr, int q1, int q2, int q3){
 	return cps;
 }
 
-
-// The arguments aren't modified here also
+/**
+ * Find the constraints on join order for left deep plans 
+ * for the worker with given part_id. 
+ *
+ * Returns the part constraints as a list of two tuples. 
+ * Each tuple is of the form (a, b). Here, a and b are 
+ * indices of the tables in the query. For example, if 
+ * the query is :
+ *
+ * 		SELECT * from table1, table2, table3, table4, table5.
+ *
+ * Then a and b are in the range 0-4, indexing these 5 tables. 
+ * The constraint (a, b) says that the ath table will be joined 
+ * before bth table. 
+ *
+ * part_id is in the range [0, n_workers). The bits of the part_id
+ * are used to generate the constraints for the worker. Pairs of
+ * tables are oriented based on the bits in part_id, starting 
+ * from the least significant bit. 
+ *
+ * For example, if n_workers=4, and part_id is 2, then:
+ *
+ * 0th Bit = 0 : Constraint is (table1, table2)
+ * 1st Bit = 1 : Constraint is (table4, table3)
+ */
 static List * part_constraints(int levels_needed, int part_id, int n_workers){
 	List * pc = NIL;
 	for(int i = 0; (1 << i) < n_workers; i++){
@@ -196,7 +238,32 @@ static List * part_constraints(int levels_needed, int part_id, int n_workers){
 	return pc;
 }
 
-// changed for bushy tree joins
+/**
+ * Find the constraints on join order for bushy plans 
+ * for the worker with given part_id. 
+ *
+ * Returns the part constraints as a list of three tuples. 
+ * Each tuple is of the form (a, b, c). Here, a, b and c are 
+ * indices of the tables in the query. For example, if 
+ * the query is :
+ *
+ * 		SELECT * from table1, table2, table3, table4, table5, table6;
+ *
+ * Then a, b and c are in the range 0-5, indexing these 6 tables. 
+ * The constraint (a, b) says that the ath table will be joined 
+ * with cth table before the result is joined with the bth table. 
+ *
+ * part_id is in the range [0, n_workers). The bits of the part_id
+ * are used to generate the constraints for the worker. Pairs of
+ * tables are oriented based on the bits in part_id, starting 
+ * from the least significant bit. 
+ *
+ * For example, if n_workers=4, and part_id is 2, then:
+ *
+ * 0th Bit = 0 : Constraint is (table1, table2, table3)
+ * 1st Bit = 1 : Constraint is (table5, table4, table6)
+ */
+
 static List * part_constraints_b(int levels_needed, int part_id, int n_workers){
 	List * pc = NIL;
 	for(int i = 0; (1 << i) < n_workers; i++){
@@ -220,6 +287,13 @@ static List * part_constraints_b(int levels_needed, int part_id, int n_workers){
 	return pc;
 }
 
+/**
+ * Concatenate lists a and b into a. Hence, 
+ * list a is modified.
+ *
+ * Example: a = [[1], [2, 3]], b = [[4, 5]]
+ * add_ptrs(a, b) = [[1], [2, 3], [4, 5]]
+ */
 List * add_ptrs(List * a, List * b){
 	for(int i = 0; i < list_length(b); i++){
 		a = lappend(a, (List *) list_nth(b, i));
@@ -227,6 +301,14 @@ List * add_ptrs(List * a, List * b){
 	return a;
 }
 
+/**
+ * Copy a list of lists into result.
+ *
+ * Example: 
+ * result = []
+ * a = [[1, 2, 3], [4, 5]]
+ * copy_paste(result, a) = result = [[1, 2, 3], [4, 5]]
+ */
 List * copy_paste(List * result, List * a){
 	for(int i = 0; i < list_length(a); i++){
 		List * a_cpy = list_copy((List *) list_nth(a, i));
@@ -235,6 +317,14 @@ List * copy_paste(List * result, List * a){
 	return result;
 }
 
+/**
+ * Concatenate two list of ints into a new list
+ * 
+ * Example:
+ * a = [1, 2, 3]
+ * b = [4, 5]
+ * copy_concat_int(a, b) = [1, 2, 3, 4, 5] // New List!
+ */
 List * copy_concat_int(List * a, List * b){
 	List * result = NIL;
 	for(int i = 0; i < list_length(a); i++){
@@ -246,7 +336,17 @@ List * copy_concat_int(List * a, List * b){
 	return result;
 }
 
-// Destroy a and b and return there cartesian product. Always pass a copy
+/**
+ * Cartesian product of two lists a and b. 
+ *
+ * The original lists are freed, so always pass a
+ * copy. 
+ *
+ * Example: 
+ * a = [1, 2, 3]
+ * b = [4, 5]
+ * cartesian_product(a, b) = [[1, 4], [1, 5], [2, 4], [2, 5], [3, 4], [3, 5]]
+ */
 List * cartesian_product(List * a, List * b){
 	if(a == NIL)
 		return b;
@@ -270,7 +370,21 @@ List * cartesian_product(List * a, List * b){
 	return new_arr;
 }
 
-List * adm_join_results(int levels_needed, List * constr){
+/**
+ * Generate list of intermediate join results which 
+ * are consistent with the constraints.
+ *
+ * Left deep plans can be ordered from left to right 
+ * where join will happen in this left to right order.
+ *
+ * Each join will give rise to an intermediate join 
+ * result. These join results has to respect constraints 
+ * of the form q1 < q2, given in the constr list. Such a 
+ * constraint states that q2 can't be part of an intermediate 
+ * join result without q1 already being part of the join result.
+ *
+ */
+static List * adm_join_results(int levels_needed, List * constr){
 	List * join_res = NIL;
 	for(int i = 0; 2*i + 1 < levels_needed; i++){
 		int q1 = 2*i;
@@ -281,11 +395,16 @@ List * adm_join_results(int levels_needed, List * constr){
 	return join_res;
 }
 
-// changed for bushy tree joins
+/**
+ * Generate list of intermediate join results which 
+ * are consistent with the constraints for bushy plans.
+ *
+ * I'm not sure of the exact logic here but the overall
+ * plan can be understood from above. This was written by 
+ * Adwait Godbole.
+ */
 static List * adm_join_results_b(int levels_needed, List * constr){
 	List * join_res = NIL;
-//	GArray * empty = g_array_new(FALSE, FALSE, sizeof(gint));
-//	g_ptr_array_add(join_res, empty);
 	for(int i = 0; 3*i + 2 < levels_needed; i++){
 		int q1 = 3*i;
 		int q2 = 3*i + 1;
@@ -293,15 +412,18 @@ static List * adm_join_results_b(int levels_needed, List * constr){
 		List * cps = constrained_power_set_b(constr, q1, q2, q3);
 		join_res = cartesian_product(join_res, cps);
 	}
-	// for (int i = 0; i < join_res->len; i++)
-	// {
-	// 	print_array(g_ptr_array_index(join_res, i));
-	// }
 	return join_res;
 }
 
 
-// Due to the bitmap, we are constrained by joins of 32 tables.
+/**
+ * Compute the best score for each intermediate subset of
+ * joined tables using dynamic programming. 
+ * 
+ * P : DP Table. A bitmap is used to index subsets of joined 
+ * tables. Since an int is used for the bitmap, we can handle 
+ * joins of atmost 32 tables.
+ */
 void try_splits(PlannerInfo *root, List * sub_rels, List * constr, RelOptInfo ** P, int levels_needed){
 
 	// Marks those sub_rels which can't be placed on the right
@@ -387,47 +509,36 @@ void try_splits(PlannerInfo *root, List * sub_rels, List * constr, RelOptInfo **
 }
 
 
-// Due to the bitmap, we are constrained by joins of 32 tables.
+/**
+ * Adwait Godbole's implementation for splits in a bushy plan.
+ */
 static void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, RelOptInfo ** P, int n){
 	List * A = NIL;
-//	GArray * empty = g_array_new(FALSE, FALSE, sizeof(gint));
-//	g_ptr_array_add(A, empty);
-	// GArray * valid = g_array_sized_new(FALSE, FALSE, sizeof(gboolean), n);
 
 	bool * present = (bool *) palloc(n*sizeof(bool));
 
-	// gboolean tr = TRUE;
-	//	bool fls = false;
 	int bitmap = 0;
 
 	for(int i = 0; i < n; i++){
 		present[i] = false;
-		// g_array_append_val(valid, tr);
 	}
 	for(int i = 0; i < list_length(sub_rels); i++){
 		int num = list_nth_int(sub_rels, i);
 		bitmap |= (1 << num);
 		present[num] = true;
 	}
-	// print_array(sub_rels);
-	// printf("%d\n", bitmap);
 	for (int i = 0; 3*i+2 < n; i++)
 	{
-
 		if(i < list_length(constr)){
 			List * ithentry = (List *) list_nth(constr, i);
 			int q1 = list_nth_int(ithentry, 0);
 			int q2 = list_nth_int(ithentry, 1);
 			int q3 = list_nth_int(ithentry, 2);
-			// GArray * S = g_array_new(FALSE, FALSE, sizeof(gint));
 			bool q1pres = present[q1];
 			bool q2pres = present[q2];
 			bool q3pres = present[q3];
 
 			List * Spower = NIL;
-
-	//		GArray * empty1 = g_array_new(FALSE, FALSE, sizeof(gint));
-	//		g_ptr_array_add(Spower, empty1);
 
 			if (q3pres)
 			{
@@ -495,21 +606,17 @@ static void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, Rel
 					}
 				}
 			}
-			// print_array(g_ptr_array_index(Spower, 1));
 			A = cartesian_product(A, Spower);
 		}else{
 			int q1 = 3*i;
 			int q2 = 3*i+1;
 			int q3 = 3*i+2;
-			// GArray * S = g_array_new(FALSE, FALSE, sizeof(gint));
 			bool q1pres = present[q1];
 			bool q2pres = present[q2];
 			bool q3pres = present[q3];
 
 			List * Spower = NIL;
 
-	//		GArray * empty1 = g_array_new(FALSE, FALSE, sizeof(gint));
-	//		g_ptr_array_add(Spower, empty1);
 
 			if (q3pres)
 			{
@@ -584,9 +691,7 @@ static void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, Rel
 					}
 				}
 			}
-			// print_array(g_ptr_array_index(Spower, 1));
 			A = cartesian_product(A, Spower);
-
 		}
 	}
 
@@ -625,14 +730,23 @@ static void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, Rel
 		}else if(P[bitmap]->cheapest_total_path->total_cost > join_rel->cheapest_total_path->total_cost){
 			P[bitmap] = join_rel;
 		}
-
 	}
-
 	pfree(present);
-//	g_ptr_array_free(A, TRUE);
 }
 
-
+/**
+ * Each worker computes the optimal plan in 
+ * its own partitioned space of plans. 
+ *
+ * The space of all join plans is broken down and
+ * indexed by a partition id, known as the part_id. 
+ * Each plan in this subspace is explored in a 
+ * bottom-up fashion. The optimal sub-plans are stored in 
+ * a DP Table. These are used to construct the plans for larger
+ * and larger subsets of the set of query tables until a plan 
+ * is devised for the entire set.
+ *
+ */
 void * worker(void * data){
 	pthread_mutex_lock(&mutex);
 	worker_data * wi = (worker_data *) data;
@@ -721,6 +835,23 @@ void * worker(void * data){
 }
 
 
+/**
+ * Find the optimal plan for a query.
+ *
+ * Based on the ideas in the paper:
+ *
+ * 		Parallelizing Query Optimization
+ * 		on Shared-Nothing Architectures.
+ *
+ * Finding the optimal query plan involves evaluating 
+ * plans in a vast space of possible plans. This problem 
+ * is NP Hard in general. This algorithm breaks down the 
+ * space of plans into subspaces where the optimal plan 
+ * in each subspace can be determined parallely. This
+ * routine then combines the results of the subspaces
+ * to determine the optimal plan under the current table 
+ * cost statistics. 
+ */
 RelOptInfo *
 parallel_join_search(PlannerInfo *root, int levels_needed, List * initial_rels, int n_workers, int p_type){
 	// worker thread name.
@@ -3392,8 +3523,8 @@ make_rel_from_joinlist(PlannerInfo *root, List *joinlist)
 		else{
 			if(levels_needed % 2 == 0)
 				return parallel_join_search(root, levels_needed, initial_rels, 4, 2);
-			// else if(levels_needed % 3 == 0)
-			//  	return parallel_join_search(root, levels_needed, initial_rels, 4, 3);
+			else if(levels_needed % 3 == 0)
+			 	return parallel_join_search(root, levels_needed, initial_rels, 4, 3);
 			else
 				return standard_join_search(root, levels_needed, initial_rels);
 		}
