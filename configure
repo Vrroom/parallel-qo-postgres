@@ -16004,7 +16004,7 @@ fi
 if test "$with_glib" = yes; then
   ac_save_CPPFLAGS=$CPPFLAGS
   CPPFLAGS="$GLIB_CFLAGS $CPPFLAGS"
-
+  LDFLAGS="$GLIB_LIBS $LDFLAGS"
   # Verify we have ICU's header files
   ac_fn_c_check_header_mongrel "$LINENO" "glib.h" "ac_cv_header_glib_h" "$ac_includes_default"
 if test "x$ac_cv_header_glib_h" = xyes; then :

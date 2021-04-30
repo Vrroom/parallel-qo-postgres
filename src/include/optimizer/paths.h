@@ -53,10 +53,14 @@ extern void set_dummy_rel_pathlist(RelOptInfo *rel);
 extern RelOptInfo *standard_join_search(PlannerInfo *root, int levels_needed,
 					 List *initial_rels);
 
-//WE DID THIS 160110098 160070013
+/**
+ * Declare the parallel_join_search routine. This replaces
+ * the standard_join_search routine above. 
+ *
+ * @author Sumit Chaturvedi
+ */
 extern RelOptInfo *parallel_join_search(PlannerInfo *root, int levels_needed,
 					 List *initial_rels, int n_workers, int p_type);
-
 
 extern void generate_gather_paths(PlannerInfo *root, RelOptInfo *rel,
 					  bool override_rows);

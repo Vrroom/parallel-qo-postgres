@@ -18,7 +18,6 @@
 #include <limits.h>
 #include <math.h>
 #include <glib.h>
-
 #include "access/sysattr.h"
 #include "access/tsmapi.h"
 #include "catalog/pg_class.h"
@@ -76,8 +75,8 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Our Functions
 int ptr_less(const void *, const void *);
-List * constrained_power_set(List *, int, int);
-List * part_constraints(int, int, int);
+static List * constrained_power_set(List *, int, int);
+static List * part_constraints(int, int, int);
 List * add_ptrs(List *, List *);
 List * copy_paste(List *, List *);
 List * copy_concat_int(List *, List *);
@@ -94,7 +93,7 @@ int ptr_less (const void * a, const void * b){
 }
 
 // constr, q1 and q2 are not modified...
-List * constrained_power_set(List * constr, int q1, int q2){
+static List * constrained_power_set(List * constr, int q1, int q2){
 	List * cps = NIL;
 	bool include_q1 = true;
 	bool include_q2 = true;
@@ -124,7 +123,7 @@ List * constrained_power_set(List * constr, int q1, int q2){
 }
 
 // changed for bushy tree joins
-List * constrained_power_set_b(List * constr, int q1, int q2, int q3){
+static List * constrained_power_set_b(List * constr, int q1, int q2, int q3){
 	List * cps = NIL;
 	//	GArray * empty = g_array_new(FALSE, FALSE, sizeof(gint));
 	//	g_ptr_array_add(cps, empty);
@@ -177,7 +176,7 @@ List * constrained_power_set_b(List * constr, int q1, int q2, int q3){
 
 
 // The arguments aren't modified here also
-List * part_constraints(int levels_needed, int part_id, int n_workers){
+static List * part_constraints(int levels_needed, int part_id, int n_workers){
 	List * pc = NIL;
 	for(int i = 0; (1 << i) < n_workers; i++){
 		int select = part_id & (1 << i);
@@ -198,7 +197,7 @@ List * part_constraints(int levels_needed, int part_id, int n_workers){
 }
 
 // changed for bushy tree joins
-List * part_constraints_b(int levels_needed, int part_id, int n_workers){
+static List * part_constraints_b(int levels_needed, int part_id, int n_workers){
 	List * pc = NIL;
 	for(int i = 0; (1 << i) < n_workers; i++){
 		int select = part_id & (1 << i);
@@ -283,7 +282,7 @@ List * adm_join_results(int levels_needed, List * constr){
 }
 
 // changed for bushy tree joins
-List * adm_join_results_b(int levels_needed, List * constr){
+static List * adm_join_results_b(int levels_needed, List * constr){
 	List * join_res = NIL;
 //	GArray * empty = g_array_new(FALSE, FALSE, sizeof(gint));
 //	g_ptr_array_add(join_res, empty);
@@ -390,7 +389,7 @@ void try_splits(PlannerInfo *root, List * sub_rels, List * constr, RelOptInfo **
 
 
 // Due to the bitmap, we are constrained by joins of 32 tables.
-void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, RelOptInfo ** P, int n){
+static void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, RelOptInfo ** P, int n){
 	List * A = NIL;
 //	GArray * empty = g_array_new(FALSE, FALSE, sizeof(gint));
 //	g_ptr_array_add(A, empty);
@@ -648,7 +647,6 @@ void * worker(void * data){
 	int p_type = wi->p_type;
 
 	// Get the relevant constraints for this worker using part_id.
-	//pthread_mutex_lock(&mutex);
 	List * constr;
 
 	// Given the set of constraints, populate this array of arrays
@@ -670,7 +668,6 @@ void * worker(void * data){
 	// (the one with the cheapest total path) for this level.
 	RelOptInfo ** P = (RelOptInfo **) palloc((1 << levels_needed) * sizeof(RelOptInfo *));
 
-	//pthread_mutex_unlock(&mutex);
 	// Initialize DP Table.
 	for(int i = 0; i < (1 << levels_needed); i++){
 		P[i] = NIL;
@@ -683,11 +680,9 @@ void * worker(void * data){
 	}
 
 	// Sort the join_res 2D array on size, in ascending order.
-	//pthread_mutex_lock(&mutex);
 	List * sorted = list_qsort(join_res, ptr_less);
 	list_free(join_res);
 	join_res = sorted;
-	//pthread_mutex_unlock(&mutex);
 
 	if(p_type == 2){
 		for(int i = 0; i < list_length(join_res); i++){
@@ -739,7 +734,7 @@ void * worker(void * data){
 RelOptInfo *
 parallel_join_search(PlannerInfo *root, int levels_needed, List * initial_rels, int n_workers, int p_type){
 	// worker thread name.
-	char * name = "parallel join thread";
+	// char * name = "parallel join thread";
 
 	// Array of threads to refer back to while joining.
 	pthread_t * threads = (pthread_t *) palloc(n_workers * sizeof(pthread_t));
@@ -754,7 +749,6 @@ parallel_join_search(PlannerInfo *root, int levels_needed, List * initial_rels, 
 	// then we copy back its PlannerInfo back into the root.
 	// This may not be necessary if the worker doesn't modify
 	// the PlannerInfo but we don't know that.
-
 	for(int i = 0; i < n_workers; i++){
 
 		// Add relevant info for this worker.
@@ -771,7 +765,6 @@ parallel_join_search(PlannerInfo *root, int levels_needed, List * initial_rels, 
 		Assert(success == 0);
 	}
 	worker_output * best = (worker_output *) palloc(sizeof(worker_output));
-	//RelOptInfo * best = (RelOptInfo *) palloc(sizeof(RelOptInfo));
 	int join_success = pthread_join(threads[0], &best);
 
 	RelOptInfo * optimal = best->optimal;
@@ -781,7 +774,6 @@ parallel_join_search(PlannerInfo *root, int levels_needed, List * initial_rels, 
 	// Set the best path.
 	for(int i = 1; i < n_workers; i++){
 		worker_output * that = (worker_output *) palloc (sizeof(worker_output));
-		//RelOptInfo * that = (RelOptInfo *) palloc(sizeof(RelOptInfo));
 		join_success = pthread_join(threads[i], &that);
 		Assert(join_success == 0);
 
@@ -3411,17 +3403,14 @@ make_rel_from_joinlist(PlannerInfo *root, List *joinlist)
 			return geqo(root, levels_needed, initial_rels);
 		else{
 			if(levels_needed % 2 == 0)
-				return parallel_join_search(root, levels_needed, initial_rels, 4, 2);
-			else if(levels_needed % 3 == 0)
-				return parallel_join_search(root, levels_needed, initial_rels, 4, 3);
+				return parallel_join_search(root, levels_needed, initial_rels, 1, 2);
+			// else if(levels_needed % 3 == 0)
+			//  	return parallel_join_search(root, levels_needed, initial_rels, 4, 3);
 			else
 				return standard_join_search(root, levels_needed, initial_rels);
 		}
 	}
 }
-
-
-/* ****** */
 
 /*
  * standard_join_search
@@ -3504,15 +3493,15 @@ standard_join_search(PlannerInfo *root, int levels_needed, List *initial_rels)
 			rel = (RelOptInfo *) lfirst(lc);
 
 			/* Create paths for partitionwise joins. */
-			//generate_partitionwise_join_paths(root, rel);
+			generate_partitionwise_join_paths(root, rel);
 
 			/*
 			 * Except for the topmost scan/join rel, consider gathering
 			 * partial paths.  We'll do the same for the topmost scan/join rel
 			 * once we know the final targetlist (see grouping_planner).
 			 */
-			//if (lev < levels_needed)
-			//	generate_gather_paths(root, rel, false);
+			if (lev < levels_needed)
+				generate_gather_paths(root, rel, false);
 
 			/* Find and save the cheapest paths for this rel */
 			set_cheapest(rel);

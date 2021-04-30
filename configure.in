@@ -1793,7 +1793,7 @@ fi
 if test "$with_glib" = yes; then
   ac_save_CPPFLAGS=$CPPFLAGS
   CPPFLAGS="$GLIB_CFLAGS $CPPFLAGS"
-
+  LDFLAGS="$GLIB_LIBS $LDFLAGS"
   # Verify we have ICU's header files
   AC_CHECK_HEADER(glib.h, [],
         [AC_MSG_ERROR([header file <glib.h> is required for GLIB])])
