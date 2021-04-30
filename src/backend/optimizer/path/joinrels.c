@@ -904,7 +904,6 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 			elog(ERROR, "unrecognized join type: %d", (int) sjinfo->jointype);
 			break;
 	}
-
 	/* Apply partitionwise join technique, if possible. */
 	try_partitionwise_join(root, rel1, rel2, joinrel, sjinfo, restrictlist);
 }
@@ -1317,7 +1316,14 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 	int			cnt_parts;
 
 	/* Guard against stack overflow due to overly deep partition hierarchy. */
-	check_stack_depth();
+	/**
+ 	 * Skip this step. Causes an ERROR when using pthreads. Maybe the
+ 	 * stack depth check condition assumes a single stack in the process
+ 	 * space.
+ 	 *
+ 	 * @author Sumit Chaturvedi
+ 	 */
+	// check_stack_depth();
 
 	/* Nothing to do, if the join relation is not partitioned. */
 	if (!IS_PARTITIONED_REL(joinrel))

@@ -347,7 +347,6 @@ void try_splits(PlannerInfo *root, List * sub_rels, List * constr, RelOptInfo **
 
 		}
 	}
-
 	// Search the space of left deep joins by partitioning
 	// this sub_rel into left tree and singleton right.
 	for(int i = 0; i < list_length(sub_rels); i++){
@@ -362,7 +361,7 @@ void try_splits(PlannerInfo *root, List * sub_rels, List * constr, RelOptInfo **
 			RelOptInfo * l_splt = P[l_bitmp];
 			RelOptInfo * r_splt = P[1 << u];
 			RelOptInfo * join_rel = make_join_rel(root, l_splt, r_splt);
-
+			
 			if(join_rel){
 
 				generate_partitionwise_join_paths(root, join_rel);
@@ -607,7 +606,6 @@ static void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, Rel
 			continue;
 		}
 		bitmapr = bitmap - bitmapl;
-		// printf("%d %d %d\n", bitmapl, bitmapr, bitmap);
 
 		RelOptInfo * l_splt = P[bitmapl];
 		RelOptInfo * r_splt = P[bitmapr];
@@ -621,7 +619,6 @@ static void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, Rel
 
 			set_cheapest(join_rel);
 		}
-//		prune_b(P, bitmapl, bitmapr);
 
 		if(P[bitmap] == NULL){
 			P[bitmap] = join_rel;
@@ -662,12 +659,10 @@ void * worker(void * data){
 	}else{
 		printf("error : invalid p_type\n");
 	}
-
 	// This is our DP Table which is indexed by a subset bitmap.
 	// It contains the best RelOptInfo struct
 	// (the one with the cheapest total path) for this level.
 	RelOptInfo ** P = (RelOptInfo **) palloc((1 << levels_needed) * sizeof(RelOptInfo *));
-
 	// Initialize DP Table.
 	for(int i = 0; i < (1 << levels_needed); i++){
 		P[i] = NIL;
@@ -691,9 +686,7 @@ void * worker(void * data){
 			// For non-singleton admissible subset,
 			// try splits.
 			if(list_length(q) > 1){
-				//pthread_mutex_lock(&mutex);
 				try_splits(root, q, constr, P, levels_needed);
-				//pthread_mutex_unlock(&mutex);
 			}
 		}
 	}else if (p_type == 3){
@@ -703,9 +696,7 @@ void * worker(void * data){
 			// For non-singleton admissible subset,
 			// try splits.
 			if(list_length(q) > 1){
-				//pthread_mutex_lock(&mutex);
 				try_splits_b(root, q, constr, P, levels_needed);
-				//pthread_mutex_unlock(&mutex);
 			}
 		}
 	}else{
@@ -714,7 +705,6 @@ void * worker(void * data){
 
 
 	// The RelOptInfo which represents the entire set.
-	//pthread_mutex_lock(&mutex);
 	RelOptInfo * best = (RelOptInfo *) palloc(sizeof(RelOptInfo));
 
 	// Copy the best solution and free the DP Table.
@@ -734,13 +724,11 @@ void * worker(void * data){
 RelOptInfo *
 parallel_join_search(PlannerInfo *root, int levels_needed, List * initial_rels, int n_workers, int p_type){
 	// worker thread name.
-	// char * name = "parallel join thread";
 
 	// Array of threads to refer back to while joining.
 	pthread_t * threads = (pthread_t *) palloc(n_workers * sizeof(pthread_t));
 	// The individual worker information that needs to be passed.
 	worker_data * items = (worker_data *) palloc(levels_needed*sizeof(worker_data));
-
 	// To ensure reliable concurrency, we will pass a copy of the
 	// root to each worker. Now each worker may/may not modify
 	// this copy. Finally the output returned by each worker
@@ -3403,7 +3391,7 @@ make_rel_from_joinlist(PlannerInfo *root, List *joinlist)
 			return geqo(root, levels_needed, initial_rels);
 		else{
 			if(levels_needed % 2 == 0)
-				return parallel_join_search(root, levels_needed, initial_rels, 1, 2);
+				return parallel_join_search(root, levels_needed, initial_rels, 4, 2);
 			// else if(levels_needed % 3 == 0)
 			//  	return parallel_join_search(root, levels_needed, initial_rels, 4, 3);
 			else
