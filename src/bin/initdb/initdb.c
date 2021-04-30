@@ -3044,27 +3044,27 @@ initialize_data_directory(void)
 	 * They are all droppable at the whim of the DBA.
 	 */
 
-	setup_sysviews(cmdfd);
+	// setup_sysviews(cmdfd);
 
-	setup_description(cmdfd);
+	// setup_description(cmdfd);
 
-	setup_collation(cmdfd);
+	// setup_collation(cmdfd);
 
-	setup_conversion(cmdfd);
+	// setup_conversion(cmdfd);
 
-	setup_dictionary(cmdfd);
+	// setup_dictionary(cmdfd);
 
-	setup_privileges(cmdfd);
+	// setup_privileges(cmdfd);
 
-	setup_schema(cmdfd);
+	// setup_schema(cmdfd);
 
-	load_plpgsql(cmdfd);
+	// load_plpgsql(cmdfd);
 
-	vacuum_db(cmdfd);
+	// vacuum_db(cmdfd);
 
-	make_template0(cmdfd);
+	// make_template0(cmdfd);
 
-	make_postgres(cmdfd);
+	// make_postgres(cmdfd);
 
 	PG_CMD_CLOSE;
 
