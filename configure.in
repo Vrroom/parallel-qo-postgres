@@ -974,7 +974,7 @@ AC_SUBST(ELF_SYS)
 # Assignments
 #
 
-CPPFLAGS="$CPPFLAGS $INCLUDES"
+CPPFLAGS="$CPPFLAGS $INCLUDES -g"
 LDFLAGS="$LDFLAGS $LIBDIRS"
 
 AC_ARG_VAR(LDFLAGS_EX, [extra linker flags for linking executables only])
