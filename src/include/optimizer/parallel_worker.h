@@ -2,6 +2,7 @@
 #define PARALLEL_WORKER_H
 
 #include "optimizer/parallel.h"
+#include "optimizer/parallel_tree.h"
 
 /* data passed to each worker thread */
 typedef struct
@@ -14,12 +15,6 @@ typedef struct
 	int p_type;          /* type of plan, linear (2) or bushy (3) */
 } WorkerData;
 
-typedef struct
-{
-	PlannerInfo * root;   /* data structure containing plan info */
-	RelOptInfo * optimal; /* optimal plan */
-} WorkerOutput;
-
 extern int ptr_less(const void *, const void *);
 extern List * constrained_power_set(List *, int, int);
 extern List * constrained_power_set_b(List *, int, int, int);
@@ -27,8 +22,8 @@ extern List * part_constraints(int, int, int);
 extern List * part_constraints_b(int, int, int);
 extern List * adm_join_results(int, List *);
 extern List * adm_join_results_b(int, List *);
-extern void try_splits(PlannerInfo *, List *, List *, RelOptInfo **, int);
-extern void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, RelOptInfo ** P, int n);
+extern void try_splits(PlannerInfo *, int, List *, List *, List *, ParallelPlan **);
+// extern void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, ParallelPlan ** P, int n);
 extern void * worker(void *);
 
 #endif

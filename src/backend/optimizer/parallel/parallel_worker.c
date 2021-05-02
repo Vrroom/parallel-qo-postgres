@@ -1,19 +1,20 @@
 #include "postgres.h"
 #include "optimizer/parallel_worker.h"
 #include "optimizer/parallel_utils.h"
+#include "optimizer/parallel_tree.h"
+#include "optimizer/parallel_eval.h"
 #include "optimizer/joininfo.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "utils/memutils.h"
 #include <pthread.h>
 
-/**
- * Postgres is written assuming a single threaded process space.
- * This sort of throws the spanner into our works. To implement
- * the no-shared algorithm as a proof of concept, we use a 
- * mutex lock to run each worker thread sequentially. Of course,
- * we don't get any parallelism benefit anymore. 
- */
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; 
+/* Copied from geqo_eval.c */
+static bool desirable_join(
+	PlannerInfo *root,
+	RelOptInfo *outer_rel, 
+	RelOptInfo *inner_rel
+);
 
 int ptr_less (const void * a, const void * b){
 	List * one = (List *) lfirst(*(ListCell **) a);
@@ -140,7 +141,8 @@ List * constrained_power_set_b(List * constr, int q1, int q2, int q3){
  */
 List * part_constraints(int levels_needed, int part_id, int n_workers){
 	List * pc = NIL;
-	for(int i = 0; (1 << i) < n_workers; i++){
+	for(int i = 0; (1 << i) < n_workers 
+			&& (2 * i + 1) < levels_needed; i++){
 		int select = part_id & (1 << i);
 		int q1, q2;
 		if(select > 0){
@@ -261,8 +263,14 @@ List * adm_join_results_b(int levels_needed, List * constr){
  * tables. Since an int is used for the bitmap, we can handle 
  * joins of atmost 32 tables.
  */
-void try_splits(PlannerInfo *root, List * sub_rels, List * constr, RelOptInfo ** P, int levels_needed){
-
+void try_splits(
+	PlannerInfo *root, 
+	int levels_needed, 
+	List * initial_rels, 
+	List * sub_rels, 
+	List * constr, 
+	ParallelPlan ** P)
+{
 	// Marks those sub_rels which can't be placed on the right
 	// in an admissible join set.
 	bool * valid = (bool *) palloc(levels_needed*sizeof(bool));
@@ -287,7 +295,6 @@ void try_splits(PlannerInfo *root, List * sub_rels, List * constr, RelOptInfo **
 		// Set those tables which are present in this sub_rel
 		present[num] = true;
 	}
-
 	// Scan the constraints list.
 	// If there is a constraint such that both the LHS and the
 	// RHS are present in the sub_rel, then mark the LHS
@@ -315,261 +322,15 @@ void try_splits(PlannerInfo *root, List * sub_rels, List * constr, RelOptInfo **
 		if(valid[u]){
 
 			int l_bitmp = bitmap & ~(1 << u);
-
-			// Pattern is copied from geqo_eval.c
-			RelOptInfo * l_splt = P[l_bitmp];
-			RelOptInfo * r_splt = P[1 << u];
-			elog(LOG, "Trying to make_join_rel");
-			RelOptInfo * join_rel = make_join_rel(root, l_splt, r_splt);
-			elog(LOG, "Made join_rel");
-			if(join_rel){
-				elog(LOG, "Setting cheapest join_rel");
-				generate_partitionwise_join_paths(root, join_rel);
-
-				if(list_length(sub_rels) != levels_needed)
-					generate_gather_paths(root, join_rel, false);
-
-				set_cheapest(join_rel);
-				elog(LOG, "Set cheapest join_rel");
-			}
-			// Set the better result in the DP Table
-			// Lower cost is better.
-			if(P[bitmap] == NULL){
-				P[bitmap] = join_rel;
-			}else if(P[bitmap]->cheapest_total_path->total_cost > join_rel->cheapest_total_path->total_cost){
-				P[bitmap] = join_rel;
-			}
+			ParallelPlan * l_splt = P[l_bitmp];
+			ParallelPlan * r_splt = P[1 << u];
+			BinaryTree * bt = merge(l_splt->root, r_splt->root);
+			double cost = parallel_eval(root, levels_needed, initial_rels, bt);
+			ParallelPlan * new_plan = create_parallel_plan(bt, cost);
+			if (P[bitmap] == NULL) P[bitmap] = new_plan;
+			else if(P[bitmap]->cost > new_plan->cost) P[bitmap] = new_plan;
 		}
 	}
-
-	pfree(valid);
-	pfree(present);
-}
-
-
-/**
- * Adwait Godbole's implementation for splits in a bushy plan.
- */
-void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, RelOptInfo ** P, int n){
-	List * A = NIL;
-
-	bool * present = (bool *) palloc(n*sizeof(bool));
-
-	int bitmap = 0;
-
-	for(int i = 0; i < n; i++){
-		present[i] = false;
-	}
-	for(int i = 0; i < list_length(sub_rels); i++){
-		int num = list_nth_int(sub_rels, i);
-		bitmap |= (1 << num);
-		present[num] = true;
-	}
-	for (int i = 0; 3*i+2 < n; i++)
-	{
-		if(i < list_length(constr)){
-			List * ithentry = (List *) list_nth(constr, i);
-			int q1 = list_nth_int(ithentry, 0);
-			int q2 = list_nth_int(ithentry, 1);
-			int q3 = list_nth_int(ithentry, 2);
-			bool q1pres = present[q1];
-			bool q2pres = present[q2];
-			bool q3pres = present[q3];
-
-			List * Spower = NIL;
-
-			if (q3pres)
-			{
-				List * arr3 = NIL;
-				arr3 = lappend_int(arr3, q3);
-				Spower = lappend(Spower, arr3);
-				if (q2pres)
-				{
-					List * arr2 = NIL;
-					arr2 = lappend_int(arr2, q2);
-					Spower = lappend(Spower, arr2);
-					if (q1pres)
-					{
-						List * arr12 = NIL;
-						arr12 = lappend_int(arr12, q1);
-						arr12 = lappend_int(arr12, q2);
-						List * arr13 = NIL;
-						arr13 = lappend_int(arr13, q1);
-						arr13 = lappend_int(arr13, q3);
-						List * arr123 = NIL;
-						arr123 = lappend_int(arr123, q1);
-						arr123 = lappend_int(arr123, q2);
-						arr123 = lappend_int(arr123, q3);
-						Spower = lappend(Spower, arr12);
-						Spower = lappend(Spower, arr13);
-						Spower = lappend(Spower, arr123);
-					}
-				}
-				else{
-					if (q1pres)
-					{
-						List * arr1 = NIL;
-						arr1 = lappend_int(arr1, q1);
-						List * arr13 = NIL;
-						arr13 = lappend_int(arr13, q1);
-						arr13 = lappend_int(arr13, q3);
-						Spower = lappend(Spower, arr1);
-						Spower = lappend(Spower, arr13);
-					}
-				}
-			}
-			else{
-				if (q2pres)
-				{
-					List * arr2 = NIL;
-					arr2 = lappend_int(arr2, q2);
-					Spower = lappend(Spower, arr2);
-					if (q1pres)
-					{
-						List * arr1 = NIL;
-						arr1 = lappend_int(arr1, q1);
-						List * arr12 = NIL;
-						arr12 = lappend_int(arr12, q1);
-						arr12 = lappend_int(arr12, q2);
-						Spower = lappend(Spower, arr12);
-						Spower = lappend(Spower, arr1);
-					}
-				}
-				else{
-					if (q1pres)
-					{
-						List * arr1 = NIL;
-						arr1 = lappend_int(arr1, q1);
-						Spower = lappend(Spower, arr1);
-					}
-				}
-			}
-			A = cartesian_product(A, Spower);
-		}else{
-			int q1 = 3*i;
-			int q2 = 3*i+1;
-			int q3 = 3*i+2;
-			bool q1pres = present[q1];
-			bool q2pres = present[q2];
-			bool q3pres = present[q3];
-
-			List * Spower = NIL;
-
-
-			if (q3pres)
-			{
-				List * arr3 = NIL;
-				arr3 = lappend_int(arr3, q3);
-				Spower = lappend(Spower, arr3);
-				if (q2pres)
-				{
-					List * arr2 = NIL;
-					arr2 = lappend_int(arr2, q2);
-					Spower = lappend(Spower, arr2);
-					List * arr23 = NIL;
-					arr23 = lappend_int(arr23, q2);
-					arr23 = lappend_int(arr23, q3);
-					Spower = lappend(Spower, arr23);
-					if (q1pres)
-					{
-						List * arr1 = NIL;
-						arr1 = lappend_int(arr1, q1);
-						Spower = lappend(Spower, arr1);
-						List * arr12 = NIL;
-						arr12 = lappend_int(arr12, q1);
-						arr12 = lappend_int(arr12, q2);
-						List * arr13 = NIL;
-						arr13 = lappend_int(arr13, q1);
-						arr13 = lappend_int(arr13, q3);
-						List * arr123 = NIL;
-						arr123 = lappend_int(arr123, q1);
-						arr123 = lappend_int(arr123, q2);
-						arr123 = lappend_int(arr123, q3);
-						Spower = lappend(Spower, arr12);
-						Spower = lappend(Spower, arr13);
-						Spower = lappend(Spower, arr123);
-					}
-				}
-				else{
-					if (q1pres)
-					{
-						List * arr1 = NIL;
-						arr1 = lappend_int(arr1, q1);
-						List * arr13 = NIL;
-						arr13 = lappend_int(arr13, q1);
-						arr13 = lappend_int(arr13, q3);
-						Spower = lappend(Spower, arr1);
-						Spower = lappend(Spower, arr13);
-					}
-				}
-			}
-			else{
-				if (q2pres)
-				{
-					List * arr2 = NIL;
-					arr2 = lappend_int(arr2, q2);
-					Spower = lappend(Spower, arr2);
-					if (q1pres)
-					{
-						List * arr1 = NIL;
-						arr1 = lappend_int(arr1, q1);
-						List * arr12 = NIL;
-						arr12 = lappend_int(arr12, q1);
-						arr12 = lappend_int(arr12, q2);
-						Spower = lappend(Spower, arr12);
-						Spower = lappend(Spower, arr1);
-					}
-				}
-				else{
-					if (q1pres)
-					{
-						List * arr1 = NIL;
-						arr1 = lappend_int(arr1, q1);
-						Spower = lappend(Spower, arr1);
-					}
-				}
-			}
-			A = cartesian_product(A, Spower);
-		}
-	}
-
-	for (int i = 0; i < list_length(A); i++)
-	{
-		List * L = (List *) list_nth(A, i);
-		int bitmapl = 0;
-		int bitmapr = 0;
-		for (int j = 0; j < list_length(L); j++)
-		{
-			int num = list_nth_int(L, j);
-			bitmapl |= (1 << num);
-
-		}
-		if (bitmapl == 0 || bitmapl == bitmap)
-		{
-			continue;
-		}
-		bitmapr = bitmap - bitmapl;
-
-		RelOptInfo * l_splt = P[bitmapl];
-		RelOptInfo * r_splt = P[bitmapr];
-		RelOptInfo * join_rel = make_join_rel(root, l_splt, r_splt);
-
-		if(join_rel){
-			generate_partitionwise_join_paths(root, join_rel);
-
-			if(list_length(sub_rels) != n)
-				generate_gather_paths(root, join_rel, false);
-
-			set_cheapest(join_rel);
-		}
-
-		if(P[bitmap] == NULL){
-			P[bitmap] = join_rel;
-		}else if(P[bitmap]->cheapest_total_path->total_cost > join_rel->cheapest_total_path->total_cost){
-			P[bitmap] = join_rel;
-		}
-	}
-	pfree(present);
 }
 
 /**
@@ -586,7 +347,6 @@ void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, RelOptInfo
  *
  */
 void * worker(void * data){
-	pthread_mutex_lock(&mutex);
 	WorkerData * wi = (WorkerData *) data;
 	PlannerInfo * root = wi->root;
 	List * initial_rels = wi->initial_rels;
@@ -603,20 +363,18 @@ void * worker(void * data){
 	List * join_res;
 
 	if(p_type == 2){
-		elog(LOG, "Optimizing for left-deep plans");
 		constr =  part_constraints(levels_needed, part_id, n_workers);
 		join_res = adm_join_results(levels_needed, constr);
 	}else if (p_type == 3){
-		elog(LOG, "Optimizing for bushy plans");
 		constr = part_constraints_b(levels_needed, part_id, n_workers);
 		join_res = adm_join_results_b(levels_needed, constr);
 	}else{
-		printf("error : invalid p_type\n");
+		printf("error : invalid p_type %d %d\n", p_type, levels_needed);
 	}
 	// This is our DP Table which is indexed by a subset bitmap.
 	// It contains the best RelOptInfo struct
 	// (the one with the cheapest total path) for this level.
-	RelOptInfo ** P = (RelOptInfo **) palloc((1 << levels_needed) * sizeof(RelOptInfo *));
+	ParallelPlan ** P = (ParallelPlan **) palloc((1 << levels_needed) * sizeof(ParallelPlan *));
 	// Initialize DP Table.
 	for(int i = 0; i < (1 << levels_needed); i++){
 		P[i] = NULL;
@@ -625,23 +383,19 @@ void * worker(void * data){
 	// For singleton subsets, just fill with the ith initial_rels.
 	for(int i = 0; i < levels_needed; i++){
 		// This is the only way I found to set values in an array.
-		P[1 << i] = (RelOptInfo *) list_nth(initial_rels, i);
+		P[1 << i] = create_parallel_plan(create_leaf(i), 0.0);
 	}
-	elog(LOG, "Initialized DP Table");
 	// Sort the join_res 2D array on size, in ascending order.
 	List * sorted = list_qsort(join_res, ptr_less);
-	list_free(join_res);
 	join_res = sorted;
 
 	if(p_type == 2){
 		for(int i = 0; i < list_length(join_res); i++){
 			List * q = list_nth(join_res, i);
-
 			// For non-singleton admissible subset,
 			// try splits.
 			if(list_length(q) > 1){
-				elog(LOG, "Try splitting admissible join result sets - %d", i); 
-				try_splits(root, q, constr, P, levels_needed);
+				try_splits(root, levels_needed, initial_rels, q, constr, P);
 			}
 		}
 	}else if (p_type == 3){
@@ -651,29 +405,14 @@ void * worker(void * data){
 			// For non-singleton admissible subset,
 			// try splits.
 			if(list_length(q) > 1){
-				elog(LOG, "Try splitting admissible join result sets - %d", i); 
-				try_splits_b(root, q, constr, P, levels_needed);
+				// try_splits_b(root, q, constr, P, levels_needed);
 			}
 		}
 	}else{
 		printf("error : invalid p_type\n");
 	}
 
-
-	// The RelOptInfo which represents the entire set.
-	RelOptInfo * best = (RelOptInfo *) palloc(sizeof(RelOptInfo));
-
-	// Copy the best solution and free the DP Table.
-	*best= *(P[(1 << levels_needed) - 1]);
-	pfree(P);
-
-	list_free_deep(join_res);
-	list_free_deep(constr);
-	WorkerOutput * opt = (WorkerOutput *) palloc(sizeof(WorkerOutput));
-	opt->optimal = best;
-	opt->root = root;
-	pthread_mutex_unlock(&mutex);
-	return opt;
+	ParallelPlan * top = P[(1 << levels_needed) - 1];
+	return top;
 }
-
 

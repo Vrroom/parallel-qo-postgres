@@ -1,4 +1,3 @@
-
 #include "postgres.h"
 #include "optimizer/parallel_utils.h"
 
@@ -77,10 +76,7 @@ List * cartesian_product(List * a, List * b){
 			lunion = lappend(lunion, concat);
 		}
 		new_arr = add_ptrs(new_arr, lunion);
-		list_free(lunion);
 	}
 
-	list_free_deep(a);
-	list_free_deep(b);
 	return new_arr;
 }

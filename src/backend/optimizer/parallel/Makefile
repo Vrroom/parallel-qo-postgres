@@ -13,6 +13,7 @@ subdir = src/backend/optimizer/parallel
 top_builddir = ../../../..
 include $(top_builddir)/src/Makefile.global
 
-OBJS = parallel_main.o parallel_utils.o parallel_worker.o
+OBJS = parallel_main.o parallel_utils.o parallel_worker.o \
+	   parallel_eval.o parallel_tree.o
 
 include $(top_srcdir)/src/backend/common.mk
