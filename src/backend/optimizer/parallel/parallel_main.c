@@ -4,6 +4,8 @@
 #include "optimizer/parallel_eval.h"
 #include "optimizer/parallel.h"
 #include <pthread.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include "utils/memutils.h"
 
 /**

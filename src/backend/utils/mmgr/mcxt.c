@@ -20,7 +20,6 @@
  */
 
 #include "postgres.h"
-#include "pthread.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "utils/memdebug.h"
@@ -48,7 +47,6 @@ MemoryContext CacheMemoryContext = NULL;
 MemoryContext MessageContext = NULL;
 MemoryContext TopTransactionContext = NULL;
 MemoryContext CurTransactionContext = NULL;
-pthread_mutex_t mutex1 = PTHREAD_MUTEX_INITIALIZER;
 
 /* This is a transient link to the active portal's memory context: */
 MemoryContext PortalContext = NULL;
@@ -925,7 +923,6 @@ void *
 palloc(Size size)
 {
 	/* duplicates MemoryContextAlloc to avoid increased overhead */
-	pthread_mutex_lock(&mutex1);
 	void	   *ret;
 	MemoryContext context = CurrentMemoryContext;
 
@@ -951,14 +948,12 @@ palloc(Size size)
 	}
 
 	VALGRIND_MEMPOOL_ALLOC(context, ret, size);
-	pthread_mutex_unlock(&mutex1);
 	return ret;
 }
 
 void *
 palloc0(Size size)
 {
-	pthread_mutex_lock(&mutex1);
 	/* duplicates MemoryContextAllocZero to avoid increased overhead */
 	void	   *ret;
 	MemoryContext context = CurrentMemoryContext;
@@ -987,7 +982,6 @@ palloc0(Size size)
 	VALGRIND_MEMPOOL_ALLOC(context, ret, size);
 
 	MemSetAligned(ret, 0, size);
-	pthread_mutex_unlock(&mutex1);
 	return ret;
 }
 
@@ -995,7 +989,6 @@ void *
 palloc_extended(Size size, int flags)
 {
 	/* duplicates MemoryContextAllocExtended to avoid increased overhead */
-	pthread_mutex_lock(&mutex1);
 	void	   *ret;
 	MemoryContext context = CurrentMemoryContext;
 
@@ -1030,7 +1023,6 @@ palloc_extended(Size size, int flags)
 
 	if ((flags & MCXT_ALLOC_ZERO) != 0)
 		MemSetAligned(ret, 0, size);
-	pthread_mutex_unlock(&mutex1);
 	return ret;
 }
 
@@ -1041,12 +1033,10 @@ palloc_extended(Size size, int flags)
 void
 pfree(void *pointer)
 {
-	pthread_mutex_lock(&mutex1);
 	MemoryContext context = GetMemoryChunkContext(pointer);
 
 
 	context->methods->free_p(context, pointer);
-	pthread_mutex_unlock(&mutex1);
 
 	VALGRIND_MEMPOOL_FREE(context, pointer);
 }
@@ -1058,7 +1048,6 @@ pfree(void *pointer)
 void *
 repalloc(void *pointer, Size size)
 {
-	pthread_mutex_lock(&mutex1);
 	MemoryContext context = GetMemoryChunkContext(pointer);
 	void	   *ret;
 
@@ -1087,7 +1076,6 @@ repalloc(void *pointer, Size size)
 
 	VALGRIND_MEMPOOL_CHANGE(context, pointer, ret, size);
 
-	pthread_mutex_unlock(&mutex1);
 	return ret;
 }
 
@@ -1108,12 +1096,10 @@ MemoryContextAllocHuge(MemoryContext context, Size size)
 	if (!AllocHugeSizeIsValid(size))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
-	pthread_mutex_lock(&mutex1);
 
 	context->isReset = false;
 
 	ret = context->methods->alloc(context, size);
-	pthread_mutex_unlock(&mutex1);
 
 	if (unlikely(ret == NULL))
 	{
@@ -1138,7 +1124,6 @@ MemoryContextAllocHuge(MemoryContext context, Size size)
 void *
 repalloc_huge(void *pointer, Size size)
 {
-	pthread_mutex_lock(&mutex1);
 	MemoryContext context = GetMemoryChunkContext(pointer);
 	void	   *ret;
 
@@ -1165,7 +1150,6 @@ repalloc_huge(void *pointer, Size size)
 	}
 
 	VALGRIND_MEMPOOL_CHANGE(context, pointer, ret, size);
-	pthread_mutex_unlock(&mutex1);
 	return ret;
 }
 
