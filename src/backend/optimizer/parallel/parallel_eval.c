@@ -155,10 +155,8 @@ try_merge_clump(
 					/* Find and save the cheapest paths for this joinrel */
 					set_cheapest(joinrel);
 					relList = lappend(relList, joinrel);				
-				} else {
-					relList = list_concat(list1, list2);
-				}
-			}
+				} else relList = list_concat(list1, list2);
+			} else relList = list_concat(list1, list2);
 		}
 	}
 	return relList;

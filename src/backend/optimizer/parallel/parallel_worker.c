@@ -3,18 +3,12 @@
 #include "optimizer/parallel_utils.h"
 #include "optimizer/parallel_tree.h"
 #include "optimizer/parallel_eval.h"
+#include "optimizer/parallel_list.h"
 #include "optimizer/joininfo.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "utils/memutils.h"
 #include <pthread.h>
-
-/* Copied from geqo_eval.c */
-static bool desirable_join(
-	PlannerInfo *root,
-	RelOptInfo *outer_rel, 
-	RelOptInfo *inner_rel
-);
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; 
 
@@ -154,10 +148,8 @@ List * part_constraints(int levels_needed, int part_id, int n_workers){
 			q1 = 2*i;
 			q2 = 2*i + 1;
 		}
-		List * arr = NIL;
-		arr = lappend_int(arr, q1);
-		arr = lappend_int(arr, q2);
-		pc = lappend(pc, arr);
+		List * arr = list_make2_int_p(q1, q2);
+		pc = lappend_p(pc, arr);
 	}
 	return pc;
 }
@@ -349,7 +341,7 @@ void try_splits(
  *
  */
 void * worker(void * data){
-	pthread_mutex_lock(&mutex);
+	// pthread_mutex_lock(&mutex);
 	WorkerData * wi = (WorkerData *) data;
 	PlannerInfo * root = wi->root;
 	List * initial_rels = wi->initial_rels;
@@ -357,6 +349,7 @@ void * worker(void * data){
 	int part_id = wi->part_id;
 	int n_workers = wi->n_workers;
 	int p_type = wi->p_type;
+	// elog(LOG, "acquired lock - part_id - %d", part_id);
 
 	// Get the relevant constraints for this worker using part_id.
 	List * constr;
@@ -366,7 +359,7 @@ void * worker(void * data){
 	List * join_res;
 
 	if(p_type == 2){
-		constr =  part_constraints(levels_needed, part_id, n_workers);
+		constr = part_constraints(levels_needed, part_id, n_workers);
 		join_res = adm_join_results(levels_needed, constr);
 	}else if (p_type == 3){
 		constr = part_constraints_b(levels_needed, part_id, n_workers);
@@ -416,7 +409,7 @@ void * worker(void * data){
 	}
 
 	ParallelPlan * top = P[(1 << levels_needed) - 1];
-	pthread_mutex_unlock(&mutex);
+	// pthread_mutex_unlock(&mutex);
 	return top;
 }
 
