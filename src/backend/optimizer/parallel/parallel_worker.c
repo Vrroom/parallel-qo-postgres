@@ -16,6 +16,8 @@ static bool desirable_join(
 	RelOptInfo *inner_rel
 );
 
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; 
+
 int ptr_less (const void * a, const void * b){
 	List * one = (List *) lfirst(*(ListCell **) a);
 	List * two = (List *) lfirst(*(ListCell **) b);
@@ -347,6 +349,7 @@ void try_splits(
  *
  */
 void * worker(void * data){
+	pthread_mutex_lock(&mutex);
 	WorkerData * wi = (WorkerData *) data;
 	PlannerInfo * root = wi->root;
 	List * initial_rels = wi->initial_rels;
@@ -413,6 +416,7 @@ void * worker(void * data){
 	}
 
 	ParallelPlan * top = P[(1 << levels_needed) - 1];
+	pthread_mutex_unlock(&mutex);
 	return top;
 }
 

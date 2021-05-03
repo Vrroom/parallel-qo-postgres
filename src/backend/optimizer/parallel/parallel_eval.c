@@ -12,7 +12,7 @@
 #include "optimizer/parallel_tree.h"
 #include "utils/memutils.h"
 
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; 
+// pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; 
 
 /* A "clump" of already-joined relations within construct_rel_based_on_plan */
 typedef struct
@@ -22,12 +22,18 @@ typedef struct
 } Clump;
 
 static List *
-merge_clump(
+force_merge_clump(
+	PlannerInfo *root, 
+	int levels_needed,
+	List *frelList,
+	RelOptInfo * rel);
+
+static List *
+try_merge_clump(
 	PlannerInfo *root, 
 	int levels_needed,
 	List *initial_rels,
-	BinaryTree * bt, 
-	bool force);
+	BinaryTree * bt);
 
 static bool desirable_join(PlannerInfo *root,
 			   RelOptInfo *outer_rel, RelOptInfo *inner_rel);
@@ -39,7 +45,7 @@ double parallel_eval (
 		List * initial_rels,
 		BinaryTree * bt)
 {
-	pthread_mutex_lock(&mutex);
+	// pthread_mutex_lock(&mutex);
 	MemoryContext mycontext;
 	MemoryContext oldcxt;
 	RelOptInfo *joinrel;
@@ -73,7 +79,7 @@ double parallel_eval (
 	root->join_rel_hash = savehash;
 	MemoryContextSwitchTo(oldcxt);
 	MemoryContextDelete(mycontext);
-	pthread_mutex_unlock(&mutex);
+	// pthread_mutex_unlock(&mutex);
 
 	return cost;
 }
@@ -91,37 +97,31 @@ construct_rel_based_on_plan(
 	 * Sometimes, a relation can't yet be joined to others due to heuristics
 	 * or actual semantic restrictions. 
 	 */
-	relList = merge_clump(root, levels_needed, initial_rels, bt, true);
-	// TODO : REPLACE WITH THE PROPER ALGORITHM.
-///	if (list_length(clumps) > 1) {
-///		/* Force-join the remaining clumps in some legal order */
-///		List	   *fclumps;
-///		ListCell   *lc;
-///
-///		fclumps = NIL;
-///		foreach(lc, clumps)
-///		{
-///			Clump	   *clump = (Clump *) lfirst(lc);
-///
-///			fclumps = merge_clump(root, fclumps, clump, num_gene, true);
-///		}
-///		clumps = fclumps;
-///	}
-///
+	relList = try_merge_clump(root, levels_needed, initial_rels, bt);
+	if (list_length(relList) > 1) {
+		/* Force-join the remaining clumps in some legal order */
+		List	   *frelList;
+		ListCell   *lc;
+		frelList = NIL;
+		foreach(lc, relList)
+		{
+			RelOptInfo *rel = (RelOptInfo *) lfirst(lc);
+			frelList = force_merge_clump(root, levels_needed, frelList, rel);
+		}
+		relList = frelList;
+	}
 	/* Did we succeed in forming a single join relation? */
 	if (list_length(relList) != 1)
 		return NULL;
-
 	return (RelOptInfo *) linitial(relList);
 }
 
 static List *
-merge_clump(
+try_merge_clump(
 	PlannerInfo *root, 
 	int levels_needed,
 	List *initial_rels,
-	BinaryTree * bt, 
-	bool force)
+	BinaryTree * bt)
 {
 	List * relList = NIL;
 	if (is_leaf(bt)) {
@@ -129,10 +129,10 @@ merge_clump(
 		RelOptInfo * rel = list_nth(initial_rels, relid);
 		relList = lappend(relList, rel);
 	} else {
-		List * list1 = merge_clump(root, levels_needed, 
-				initial_rels, bt->left, force);
-		List * list2 = merge_clump(root, levels_needed, 
-				initial_rels, bt->right, force);
+		List * list1 = try_merge_clump(root, levels_needed, 
+				initial_rels, bt->left);
+		List * list2 = try_merge_clump(root, levels_needed, 
+				initial_rels, bt->right);
 		/* 
  		 * It is possible that these are lists with more than one
  		 * element in either of them. If so, then just concat and
@@ -145,7 +145,7 @@ merge_clump(
 			Assert(list_length(list1) == 1 && list_length(list2) == 1);
 			RelOptInfo * rel1 = linitial(list1);
 			RelOptInfo * rel2 = linitial(list2);
-			if (force || desirable_join(root, rel1, rel2)) {
+			if (desirable_join(root, rel1, rel2)) {
 				RelOptInfo *joinrel;
 				joinrel = make_join_rel(root, rel1, rel2);
 				if (joinrel) {
@@ -162,6 +162,62 @@ merge_clump(
 		}
 	}
 	return relList;
+}
+
+static List *
+force_merge_clump(
+	PlannerInfo *root, 
+	int levels_needed, 
+	List *frelList, 
+	RelOptInfo *rel)
+{
+	ListCell   *prev;
+	ListCell   *lc;
+	/* Look for a clump that new_clump can join to */
+	prev = NULL;
+	foreach(lc, frelList)
+	{
+		RelOptInfo *old_rel = (RelOptInfo *) lfirst(lc);
+		RelOptInfo *joinrel;
+		joinrel = make_join_rel(root, old_rel, rel);
+		/* Keep searching if join order is not valid */
+		if (joinrel) {
+			/* Create paths for partitionwise joins. */
+			generate_partitionwise_join_paths(root, joinrel);
+			if (bms_num_members(joinrel->relids) < levels_needed)
+				generate_gather_paths(root, joinrel, false);
+			/* Find and save the cheapest paths for this joinrel */
+			set_cheapest(joinrel);
+			/* Absorb new clump into old */
+			old_rel = joinrel;
+			/* Remove old_clump from list */
+			frelList = list_delete_cell(frelList, lc, prev);
+			/*
+			 * Recursively try to merge the enlarged old_clump with
+			 * others.  When no further merge is possible, we'll reinsert
+			 * it into the list.
+			 */
+			return force_merge_clump(root, levels_needed, frelList, old_rel);
+		}
+		prev = lc;
+	}
+	int rel_size = bms_num_members(rel->relids);
+	if (frelList == NIL || rel_size == 1)
+		return lappend(frelList, rel);
+	/* Check if it belongs at the front */
+	lc = list_head(frelList);
+	if (rel_size > bms_num_members(((RelOptInfo *) lfirst(lc))->relids))
+		return lcons(rel, frelList);
+	/* Else search for the place to insert it */
+	for (;;)
+	{
+		ListCell   *nxt = lnext(lc);
+		if (nxt == NULL || rel_size > bms_num_members(((RelOptInfo *) lfirst(nxt))->relids))
+			break;				/* it belongs after 'lc', before 'nxt' */
+		lc = nxt;
+	}
+	lappend_cell(frelList, lc, rel);
+	return frelList;
 }
 
 /*

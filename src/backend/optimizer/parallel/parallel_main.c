@@ -59,22 +59,22 @@ parallel_join_search(
 		items[i].n_workers = n_workers;
 		items[i].p_type = p_type;
 
-        // int success = pthread_create(&threads[i], NULL, worker, &items[i]);
-		// Assert(success == 0);
+        int success = pthread_create(&threads[i], NULL, worker, &items[i]);
+		Assert(success == 0);
 	}
-	// ParallelPlan * best = (ParallelPlan *) palloc(sizeof(ParallelPlan));
-	// int join_success = pthread_join(threads[0], &best);
-	ParallelPlan * best = worker(&items[0]);
+	ParallelPlan * best = (ParallelPlan *) palloc(sizeof(ParallelPlan));
+	int join_success = pthread_join(threads[0], &best);
+	// ParallelPlan * best = worker(&items[0]);
 
 	ParallelPlan * optimal = best;
-	// Assert(join_success == 0);
+	 Assert(join_success == 0);
 	// Join threads and extract individual results.
 	// Set the best path.
 	for(int i = 1; i < n_workers; i++){
-		// ParallelPlan * that = (ParallelPlan *) palloc (sizeof(ParallelPlan));
-		// join_success = pthread_join(threads[i], &that);
-		// Assert(join_success == 0);
-		ParallelPlan * that = worker(&items[i]);
+		ParallelPlan * that = (ParallelPlan *) palloc (sizeof(ParallelPlan));
+		join_success = pthread_join(threads[i], &that);
+		Assert(join_success == 0);
+		// ParallelPlan * that = worker(&items[i]);
 		if (that->cost < optimal->cost) optimal = that;
 	}
 	MemoryContextSwitchTo(oldcxt);
