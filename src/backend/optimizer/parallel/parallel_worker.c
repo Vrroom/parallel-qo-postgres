@@ -3,7 +3,6 @@
 #include "optimizer/parallel_utils.h"
 #include "optimizer/parallel_tree.h"
 #include "optimizer/parallel_eval.h"
-#include "optimizer/parallel_list.h"
 #include "optimizer/joininfo.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
@@ -60,56 +59,6 @@ List * constrained_power_set(List * constr, int q1, int q2){
 	return cps;
 }
 
-// changed for bushy tree joins
-List * constrained_power_set_b(List * constr, int q1, int q2, int q3){
-	List * cps = NIL;
-	// size 1 elems of power(S) and {1, 2} in S
-	List * arr1 = NIL;
-	arr1 = lappend_int(arr1, q1);
-	cps = lappend(cps, arr1);
-	List * arr2 = NIL;
-	arr2 = lappend_int(arr2, q2);
-	cps = lappend(cps, arr2);
-	List * arr3 = NIL;
-	arr3 = lappend_int(arr3, q3);
-	cps = lappend(cps, arr3);
-
-	List * arr12 = NIL;
-	arr12 = lappend_int(arr12, q1);
-	arr12 = lappend_int(arr12, q2);
-	cps = lappend(cps, arr12);
-
-	bool include_q1q3 = true;
-	bool include_q2q3 = true;
-	for(int i = 0; i < list_length(constr); i++){
-		List * ci = (List *) list_nth(constr, i);
-		if(list_nth_int(ci, 1) == q1)
-			include_q1q3 = false;
-		else if(list_nth_int(ci, 1) == q2)
-			include_q2q3 = false;
-	}
-	if(include_q1q3){
-		List * arr = NIL;
-		arr = lappend_int(arr, q1);
-		arr = lappend_int(arr, q3);
-		cps = lappend(cps, arr);
-	}
-	if(include_q2q3){
-		List * arr = NIL;
-		arr = lappend_int(arr, q2);
-		arr = lappend_int(arr, q3);
-		cps = lappend(cps, arr);
-	}
-
-	// size 3 {1, 2, 3} in S
-	List * arr123 = NIL;
-	arr123 = lappend_int(arr123, q1);
-	arr123 = lappend_int(arr123, q2);
-	arr123 = lappend_int(arr123, q3);
-	cps = lappend(cps, arr123);
-	return cps;
-}
-
 /**
  * Find the constraints on join order for left deep plans 
  * for the worker with given part_id. 
@@ -148,56 +97,7 @@ List * part_constraints(int levels_needed, int part_id, int n_workers){
 			q1 = 2*i;
 			q2 = 2*i + 1;
 		}
-		List * arr = list_make2_int_p(q1, q2);
-		pc = lappend_p(pc, arr);
-	}
-	return pc;
-}
-
-/**
- * Find the constraints on join order for bushy plans 
- * for the worker with given part_id. 
- *
- * Returns the part constraints as a list of three tuples. 
- * Each tuple is of the form (a, b, c). Here, a, b and c are 
- * indices of the tables in the query. For example, if 
- * the query is :
- *
- * 		SELECT * from table1, table2, table3, table4, table5, table6;
- *
- * Then a, b and c are in the range 0-5, indexing these 6 tables. 
- * The constraint (a, b) says that the ath table will be joined 
- * with cth table before the result is joined with the bth table. 
- *
- * part_id is in the range [0, n_workers). The bits of the part_id
- * are used to generate the constraints for the worker. Pairs of
- * tables are oriented based on the bits in part_id, starting 
- * from the least significant bit. 
- *
- * For example, if n_workers=4, and part_id is 2, then:
- *
- * 0th Bit = 0 : Constraint is (table1, table2, table3)
- * 1st Bit = 1 : Constraint is (table5, table4, table6)
- */
-
-List * part_constraints_b(int levels_needed, int part_id, int n_workers){
-	List * pc = NIL;
-	for(int i = 0; (1 << i) < n_workers; i++){
-		int select = part_id & (1 << i);
-		int q1, q2, q3;
-		if(select > 0){
-			q1 = 3*i + 1;
-			q2 = 3*i;
-			q3 = 3*i + 2;
-		}else{
-			q1 = 3*i;
-			q2 = 3*i + 1;
-			q3 = 3*i + 2;
-		}
-		List * arr = NIL;
-		arr = lappend_int(arr, q1);
-		arr = lappend_int(arr, q2);
-		arr = lappend_int(arr, q3);
+		List * arr = list_make2_int(q1, q2);
 		pc = lappend(pc, arr);
 	}
 	return pc;
@@ -227,27 +127,6 @@ List * adm_join_results(int levels_needed, List * constr){
 	}
 	return join_res;
 }
-
-/**
- * Generate list of intermediate join results which 
- * are consistent with the constraints for bushy plans.
- *
- * I'm not sure of the exact logic here but the overall
- * plan can be understood from above. This was written by 
- * Adwait Godbole.
- */
-List * adm_join_results_b(int levels_needed, List * constr){
-	List * join_res = NIL;
-	for(int i = 0; 3*i + 2 < levels_needed; i++){
-		int q1 = 3*i;
-		int q2 = 3*i + 1;
-		int q3 = 3*i + 2;
-		List * cps = constrained_power_set_b(constr, q1, q2, q3);
-		join_res = cartesian_product(join_res, cps);
-	}
-	return join_res;
-}
-
 
 /**
  * Compute the best score for each intermediate subset of
@@ -341,7 +220,6 @@ void try_splits(
  *
  */
 void * worker(void * data){
-	// pthread_mutex_lock(&mutex);
 	WorkerData * wi = (WorkerData *) data;
 	PlannerInfo * root = wi->root;
 	List * initial_rels = wi->initial_rels;
@@ -349,7 +227,6 @@ void * worker(void * data){
 	int part_id = wi->part_id;
 	int n_workers = wi->n_workers;
 	int p_type = wi->p_type;
-	// elog(LOG, "acquired lock - part_id - %d", part_id);
 
 	// Get the relevant constraints for this worker using part_id.
 	List * constr;
@@ -361,9 +238,6 @@ void * worker(void * data){
 	if(p_type == 2){
 		constr = part_constraints(levels_needed, part_id, n_workers);
 		join_res = adm_join_results(levels_needed, constr);
-	}else if (p_type == 3){
-		constr = part_constraints_b(levels_needed, part_id, n_workers);
-		join_res = adm_join_results_b(levels_needed, constr);
 	}else{
 		printf("error : invalid p_type %d %d\n", p_type, levels_needed);
 	}
@@ -394,22 +268,10 @@ void * worker(void * data){
 				try_splits(root, levels_needed, initial_rels, q, constr, P);
 			}
 		}
-	}else if (p_type == 3){
-		for(int i = 0; i < list_length(join_res); i++){
-			List * q = list_nth(join_res, i);
-
-			// For non-singleton admissible subset,
-			// try splits.
-			if(list_length(q) > 1){
-				// try_splits_b(root, q, constr, P, levels_needed);
-			}
-		}
 	}else{
 		printf("error : invalid p_type\n");
 	}
-
 	ParallelPlan * top = P[(1 << levels_needed) - 1];
-	// pthread_mutex_unlock(&mutex);
 	return top;
 }
 

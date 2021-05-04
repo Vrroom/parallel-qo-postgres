@@ -3,7 +3,6 @@
 #include <float.h>
 #include <limits.h>
 #include <math.h>
-#include <pthread.h>
 
 #include "optimizer/joininfo.h"
 #include "optimizer/pathnode.h"
@@ -12,7 +11,6 @@
 #include "optimizer/parallel_tree.h"
 #include "utils/memutils.h"
 
-// pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; 
 
 /* A "clump" of already-joined relations within construct_rel_based_on_plan */
 typedef struct
@@ -45,7 +43,6 @@ double parallel_eval (
 		List * initial_rels,
 		BinaryTree * bt)
 {
-	// pthread_mutex_lock(&mutex);
 	MemoryContext mycontext;
 	MemoryContext oldcxt;
 	RelOptInfo *joinrel;
@@ -79,7 +76,6 @@ double parallel_eval (
 	root->join_rel_hash = savehash;
 	MemoryContextSwitchTo(oldcxt);
 	MemoryContextDelete(mycontext);
-	// pthread_mutex_unlock(&mutex);
 
 	return cost;
 }

@@ -17,13 +17,9 @@ typedef struct
 
 extern int ptr_less(const void *, const void *);
 extern List * constrained_power_set(List *, int, int);
-extern List * constrained_power_set_b(List *, int, int, int);
 extern List * part_constraints(int, int, int);
-extern List * part_constraints_b(int, int, int);
 extern List * adm_join_results(int, List *);
-extern List * adm_join_results_b(int, List *);
 extern void try_splits(PlannerInfo *, int, List *, List *, List *, ParallelPlan **);
-// extern void try_splits_b(PlannerInfo * root, List * sub_rels, List * constr, ParallelPlan ** P, int n);
 extern void * worker(void *);
 
 #endif
