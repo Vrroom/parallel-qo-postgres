@@ -23,7 +23,7 @@ parallel_join_search (query_data, n_workers) :
   return worker_plans[argmin(costs)]
 ```
 
-Replacing the `for` loop with a `parfor` of some kind is tricky in Postgres. Here are some attempts that I made to do this:
+Replacing the `for` loop with a `parfor` of is tricky in Postgres. Here are some attempts that I made to do this:
 
 1. _Using Pthreads_: A Postgres backend process assumes that it contains a single stack. It is not thread safe. Hence using `pthreads` invariably leads to segmentation faults which are not easily traceable.
 2. _Using Postgres Internal Parallel Library_: In order to explain this attempt, you need to know some details of how Postgres handles queries. Normally, you launch a server.
@@ -115,7 +115,45 @@ Although there are differences in the two plans, the total cost estimate are alm
 
 ## Algorithm
 
-We find the optimal left deep join plan. Consider joining relations a, b, c and d. A left deep join plan is of the form (((a ⋈ b) ⋈ c) ⋈ d). To simplify matters, a left deep join plan is a string a ⋈ b ⋈ c ⋈ d where join operations are executed in order, from left to right. Simplest way of finding the optimal plan is to enumerate all permutations and estimate their costs. We can be slightly 
+We find the optimal left deep join plan. Consider joining relations a, b, c and d. A left deep join plan is of the form (((a ⋈ b) ⋈ c) ⋈ d). To simplify matters, a left deep join plan is a string a ⋈ b ⋈ c ⋈ d where join operations are executed in order, from left to right. Simplest way of finding the optimal plan is to enumerate all permutations and estimate their costs. We can be slightly smart and use dynamic programming to build the optimal order from bottom-up. In the DP table, we store the optimal join order for all subsets of relations. Then, we can find the optimal join order for the larger subset as follows:
+
+```python
+for i, right in enumerate(rels) : 
+  left = rels - {i} # Seperate out ith rel from the set
+  tryJoin = join(DP[left], right) # ((optimal join order for smaller set) ⋈ i)
+  cost = estimateJoinCost(tryJoin)
+  if DP[rels].cost > cost : # Check whether we have found a better join order
+    DP[rels] = tryJoin 
+```
+
+The corresponding code can be found [here](https://github.com/Vrroom/parallel-qo-postgres/blob/30846f6cbd9234bb480794f8c850b454ace05d6d/src/backend/optimizer/parallel/parallel_worker.c#L193).
+
+In order to split the dynamic programming computation across many workers, we place constraints on the join orders that each worker searches through. First, the relations are grouped in pairs.
+
+(a, b), (c, d)
+
+On each pair, a worker places constraints on pairs of the form: _relation 1 will be before relation 2 in the join order_. So if we have 4 workers, we'll split the space of join orders as: 
+
+1. Worker 1: a before b and c before d.
+2. Worker 2: b before a and c before d.
+3. Worker 3: a before b and d before c.
+4. Worker 4: b before a and d before c.
+
+For example, Worker 1 will search over the permutations:
+
+1. a, b, c, d
+2. a, c, b, d
+3. a, c, d, b
+4. c, a, d, b
+5. c, d, a, b
+6. c, a, b, d
+
+The dynamic programming step is suitably modified so that each worker only searches for valid orders under its constraints. The remaining crucial bit is the `estimateJoinCost` step in the pseudo-code. This is done in [src/backend/optimizer/parallel/parallel_eval.c](https://github.com/Vrroom/parallel-qo-postgres/blob/30846f6cbd9234bb480794f8c850b454ace05d6d/src/backend/optimizer/parallel/parallel_eval.c#L40). Given a plan, we use Postgres' existing planning machinery to combine the relations in the order specified. Given an order, Postgres evaluates the sizes of the tables, effect of join clauses (is the data sorted by the variable in the join clause in which case MERGE JOIN may be fast), efficiency of scanning tables (do I use sequential scan or is the data indexed?) among other things. In some cases, due to semantic restrictions imposed by the SQL query, the join order may not even be feasible. 
+
+## Limitations
+
+1. Not Parallel! If anyone knows how to do this. Please feel free to reach out to me. 
+2. Doesn't evaluate bushy plans or arbitrary binary trees. For example: (a ⋈ (b ⋈ d) ⋈ c).
 
 ## Acknowledgements
 
