@@ -1,6 +1,6 @@
 # (not) Parallel Query Optimizer for Postgres
 
-We replaced the original query optimizer in Postgres with a (not) parallel query optimizer based on [Parallelizing Query Optimization on Shared-Nothing Architectures](https://github.com/Vrroom/parallel-qo-postgres/blob/master/p660-trummer.pdf). Given a complex SQL query, containing multiple joins such as: 
+I replaced the original query optimizer in Postgres with a (not) parallel query optimizer based on [Parallelizing Query Optimization on Shared-Nothing Architectures](https://github.com/Vrroom/parallel-qo-postgres/blob/master/p660-trummer.pdf). Given a complex SQL query, containing multiple joins such as: 
 
 ```
 SELECT * FROM table1, table2, table3, table4, table5 WHERE table1.id = table2.id AND table3.id = table4.id;
@@ -23,7 +23,7 @@ parallel_join_search (query_data, n_workers) :
   return worker_plans[argmin(costs)]
 ```
 
-Replacing the `for` loop with a `parfor` of is tricky in Postgres. Here are some attempts that I made to do this:
+Replacing the `for` loop with a `parfor` is tricky in Postgres. Here are some attempts that I made to do this:
 
 1. _Using Pthreads_: A Postgres backend process assumes that it contains a single stack. It is not thread safe. Hence using `pthreads` invariably leads to segmentation faults which are not easily traceable.
 2. _Using Postgres Internal Parallel Library_: In order to explain this attempt, you need to know some details of how Postgres handles queries. Normally, you launch a server.
@@ -93,7 +93,7 @@ We get the following plan:
          ->  Seq Scan on inventory  (cost=0.00..75.81 rows=4581 width=20)
 ```
 
-If we check what the plan devised by the `standard_join_planner`, we get:
+To compare, the plan devised by the `standard_join_planner` is:
 
 ```
 Hash Join  (cost=229.15..626.41 rows=25021 width=451)
@@ -111,7 +111,7 @@ Hash Join  (cost=229.15..626.41 rows=25021 width=451)
                      ->  Seq Scan on film  (cost=0.00..65.00 rows=1000 width=390)
 ```
 
-Although there are differences in the two plans, the total cost estimate are almost the same. This is good news 😋.
+Although different the total cost estimate are almost the same. This is good news 😋.
 
 ## Algorithm
 
