@@ -21,29 +21,68 @@ $ ./configure --prefix=`pwd`/install --with-glib
 $ make && make install
 ```
 
-## Examples
+## Example
 
-Running examples is not straightforward 🙈. Our changes broke Postgres and we can handle only a subset of SQL queries. For example, we can't handle nested queries. I think the Postgres client will simply segfault if you try to run such queries. Anyway, to test it out, you will have to go back to the last official commit (`4a2994f055`) in this repo, build it, load the toy [Pagila](https://github.com/devrimgunduz/pagila) dataset, checkout master and build again! It is a lot of work, I'm sorry. I'll try to find a better way to integrate our implementation without breaking Postgres. Till then, follow the instructions below.
-
-```
-$ git checkout 4a2994f055
-$ ./configure --prefix=`pwd`/install
-$ make && make install
-```
-
-After this, change directory to installation directory and create the toy database.
+To test this work it out, you can load the toy [Pagila](https://github.com/devrimgunduz/pagila) database. I have provided a script to load the database. 
 
 ```
-$ cd install/bin
-$ ./initdb -D data
-$ ./postgres -D data/ &
-$ ./createdb pagila
-$ ./psql -d pagila -f ../../pagila/pagila-schema.sql
-$ ./psql -d pagila -f ../../pagila/pagila-data.sql
-$ ./psql -d pagila -f ../../pagila/pagila-insert-data.sql
+$ ./create_toy_database.sh
 ```
 
-Having created the dataset, checkout `master` and follow the installation instructions above. If anyone actually tries all this, I'm very sorry for all this extra effort 🙈.
+After this, change directory to the installation directory and run psql, supplying it with `test.sql`.
+
+```
+$ cd install/bin/
+$ ./psql -d pagila -f ../../test.sql
+```
+
+For example, for the query:
+
+```
+EXPLAIN SELECT * 
+FROM actor, film_actor, film, inventory
+WHERE actor.actor_id = film_actor.actor_id AND
+film_actor.film_id = film.film_id AND 
+film.film_id = inventory.film_id;
+```
+
+We get the following plan:
+
+```
+ Hash Join  (cost=217.07..647.59 rows=25021 width=451)
+   Hash Cond: (film_actor.film_id = inventory.film_id)
+   ->  Hash Join  (cost=84.00..197.65 rows=5462 width=431)
+         Hash Cond: (film_actor.film_id = film.film_id)
+         ->  Hash Join  (cost=6.50..105.76 rows=5462 width=41)
+               Hash Cond: (film_actor.actor_id = actor.actor_id)
+               ->  Seq Scan on film_actor  (cost=0.00..84.62 rows=5462 width=16)
+               ->  Hash  (cost=4.00..4.00 rows=200 width=25)
+                     ->  Seq Scan on actor  (cost=0.00..4.00 rows=200 width=25)
+         ->  Hash  (cost=65.00..65.00 rows=1000 width=390)
+               ->  Seq Scan on film  (cost=0.00..65.00 rows=1000 width=390)
+   ->  Hash  (cost=75.81..75.81 rows=4581 width=20)
+         ->  Seq Scan on inventory  (cost=0.00..75.81 rows=4581 width=20)
+```
+
+If we check what the plan devised by the `standard_join_planner`, we get:
+
+```
+Hash Join  (cost=229.15..626.41 rows=25021 width=451)
+   Hash Cond: (film_actor.film_id = film.film_id)
+   ->  Hash Join  (cost=6.50..105.76 rows=5462 width=41)
+         Hash Cond: (film_actor.actor_id = actor.actor_id)
+         ->  Seq Scan on film_actor  (cost=0.00..84.62 rows=5462 width=16)
+         ->  Hash  (cost=4.00..4.00 rows=200 width=25)
+               ->  Seq Scan on actor  (cost=0.00..4.00 rows=200 width=25)
+   ->  Hash  (cost=165.39..165.39 rows=4581 width=410)
+         ->  Hash Join  (cost=77.50..165.39 rows=4581 width=410)
+               Hash Cond: (inventory.film_id = film.film_id)
+               ->  Seq Scan on inventory  (cost=0.00..75.81 rows=4581 width=20)
+               ->  Hash  (cost=65.00..65.00 rows=1000 width=390)
+                     ->  Seq Scan on film  (cost=0.00..65.00 rows=1000 width=390)
+```
+
+There are some slight differences in the plans for the two algorithms, but importantly, the total cost is similar. So that is good news 😋.  
 
 ## Algorithm
 
