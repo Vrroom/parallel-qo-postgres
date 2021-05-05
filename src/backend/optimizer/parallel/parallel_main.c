@@ -51,11 +51,11 @@ parallel_join_search(
 	ParallelPlan * best = worker(&items[0]);
 	// Set the best path.
 	for(int i = 1; i < n_workers; i++){
-	ParallelPlan * that = worker(&items[i]);
-	if (that->cost < best->cost) best = that;
+		ParallelPlan * that = worker(&items[i]);
+	 	if (that->cost < best->cost) best = that;
 	}
 	MemoryContextSwitchTo(oldcxt);
+	RelOptInfo * rel = construct_rel_based_on_plan(root, levels_needed, initial_rels, best->root);
 	MemoryContextDelete(mycontext);
-	return construct_rel_based_on_plan(root, 
- 		levels_needed, initial_rels, best->root);
+	return rel;
 }

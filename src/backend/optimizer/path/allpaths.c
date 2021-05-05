@@ -2668,12 +2668,7 @@ make_rel_from_joinlist(PlannerInfo *root, List *joinlist)
 		else if (enable_geqo && levels_needed >= geqo_threshold)
 			return geqo(root, levels_needed, initial_rels);
 		else{
-			if(levels_needed % 2 == 0)
-				return parallel_join_search(root, levels_needed, initial_rels, 4, 2);
-			// else if(levels_needed % 3 == 0)
-			//  	return parallel_join_search(root, levels_needed, initial_rels, 4, 3);
-			else
-				return standard_join_search(root, levels_needed, initial_rels);
+			return parallel_join_search(root, levels_needed, initial_rels, 4, 2);
 		}
 	}
 }

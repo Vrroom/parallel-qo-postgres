@@ -7,9 +7,6 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "utils/memutils.h"
-#include <pthread.h>
-
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; 
 
 int ptr_less (const void * a, const void * b){
 	List * one = (List *) lfirst(*(ListCell **) a);
@@ -119,11 +116,16 @@ List * part_constraints(int levels_needed, int part_id, int n_workers){
  */
 List * adm_join_results(int levels_needed, List * constr){
 	List * join_res = NIL;
-	for(int i = 0; 2*i + 1 < levels_needed; i++){
+	int i = 0;
+	for(; 2*i+1 < levels_needed; i++){
 		int q1 = 2*i;
 		int q2 = 2*i + 1;
 		List * cps = constrained_power_set(constr, q1, q2);
 		join_res = cartesian_product(join_res, cps);
+	}
+	if (2*i < levels_needed && 2*i+1 >= levels_needed) {
+		List * l = list_make1(list_make1_int(2 * i));
+		join_res = cartesian_product(join_res, l);
 	}
 	return join_res;
 }
@@ -177,8 +179,8 @@ void try_splits(
 
 		List * ci = (List *) list_nth(constr, i);
 
-		int q1 = list_nth_int(ci, 0);
-		int q2 = list_nth_int(ci, 1);
+		int q1 = linitial_int(ci);
+		int q2 = lsecond_int(ci);
 
 		if(present[q1] && present[q2]){
 
@@ -241,6 +243,7 @@ void * worker(void * data){
 	}else{
 		printf("error : invalid p_type %d %d\n", p_type, levels_needed);
 	}
+
 	// This is our DP Table which is indexed by a subset bitmap.
 	// It contains the best RelOptInfo struct
 	// (the one with the cheapest total path) for this level.
