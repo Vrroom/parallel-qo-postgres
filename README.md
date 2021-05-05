@@ -148,7 +148,7 @@ For example, Worker 1 will search over the permutations:
 5. c, d, a, b
 6. c, a, b, d
 
-The dynamic programming step is suitably modified so that each worker only searches for valid orders under its constraints. The remaining crucial bit is the `estimateJoinCost` step in the pseudo-code. This is done in [src/backend/optimizer/parallel/parallel_eval.c](https://github.com/Vrroom/parallel-qo-postgres/blob/30846f6cbd9234bb480794f8c850b454ace05d6d/src/backend/optimizer/parallel/parallel_eval.c#L40). Given a plan, we use Postgres' existing planning machinery to combine the relations in the order specified. Given an order, Postgres evaluates the sizes of the tables, effect of join clauses (is the data sorted by the variable in the join clause in which case MERGE JOIN may be fast), efficiency of scanning tables (do I use sequential scan or is the data indexed?) among other things. In some cases, due to semantic restrictions imposed by the SQL query, the join order may not even be feasible. 
+The dynamic programming step is suitably modified so that each worker only searches for valid orders under its constraints. The remaining crucial bit is the `estimateJoinCost` step in the pseudo-code. This is done in [src/backend/optimizer/parallel/parallel_eval.c](https://github.com/Vrroom/parallel-qo-postgres/blob/30846f6cbd9234bb480794f8c850b454ace05d6d/src/backend/optimizer/parallel/parallel_eval.c#L40). Given a plan, we use Postgres' existing planning machinery to combine the relations in the order specified. Given an order, Postgres evaluates the sizes of the tables, effect of join clauses (is the data sorted by the variable in the join clause in which case MERGE JOIN may be fast), efficiency of scanning tables (do I use sequential scan or is the data indexed) among other things. In some cases, due to semantic restrictions imposed by the SQL query, the join order may not even be feasible. 
 
 ## Limitations
 
@@ -158,5 +158,3 @@ The dynamic programming step is suitably modified so that each worker only searc
 ## Acknowledgements
 
 This work started as a course project for a database course (CS 317) at IITB under [S. Sudarshan](https://www.cse.iitb.ac.in/~sudarsha/). My team-mates were [Adwait](https://github.com/adwait), [Nitish](https://github.com/joshinh), Nilay. This work profited immensely from discussions with [Julien](https://github.com/rjuju). 
-
-
