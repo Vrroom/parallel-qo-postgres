@@ -42,7 +42,7 @@ and connect to it using a client such as `psql`. The server is called `postmaste
 This repository is a fork of the original [Postgres repo](https://github.com/postgres/postgres). The build system is the same as theirs. However, we have an additional GLIB dependency due to which we had to change the installation instructions slightly. We suggest that you install this code into a local directory. In the instructions, we create a local directory `install` where the RDBMS is installed.
 
 ```
-$ git clone https://github.com/Vrroom/parallel-qo-postgres.git
+$ git clone --recurse-submodules https://github.com/Vrroom/parallel-qo-postgres.git
 $ cd parallel-qo-postgres
 $ export PKG_CONFIG=`which pkg-config`
 $ mkdir install
